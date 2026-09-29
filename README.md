@@ -10,7 +10,7 @@ After the agent edits your files, run `/approve` to walk through each diff hunk 
 
 - **Granular approval** — accept or reject one hunk at a time, all hunks in a file, or all changes across the repo
 - **Syntax highlighting** — diff hunks are rendered with [Shiki](https://shiki.style/) (the same engine VS Code uses) using the `dark-plus` theme
-- **Revision requests** — ask the agent to fix a hunk inline; the review pauses, the agent gets your feedback, and you re-run `/approve` when done
+- **Revision requests** — ask the agent to fix a hunk inline; the agent gets your feedback, and when it finishes you're offered a one-keypress return to the same hunk to validate
 - **Untracked files** — new files are shown as whole-file hunks and can be approved or deleted
 - **Per-hunk reject** — rejecting a hunk asks the agent to revert just that hunk, and when the agent finishes you're offered a one-keypress return to the review at that hunk to validate; `R`/`--reject-all` reset the whole file to the index instantly; staged changes are never touched
 
