@@ -11,7 +11,7 @@ import {
 } from "@earendil-works/pi-tui";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { FileChange, Hunk, HunkActionDecision } from "./types.ts";
-import type { GitOps, ReviewSummary } from "./review.ts";
+import type { GitOps, ReviewSummary, HunkView } from "./review.ts";
 import { runReview } from "./review.ts";
 import { buildReviseMessage } from "./revise.ts";
 import type { Highlighter } from "./highlight.ts";
@@ -31,6 +31,10 @@ export function hunkKeyToAction(data: string): HunkActionDecision | null {
   if (matchesKey(data, "r")) return { action: "reject" };
   if (matchesKey(data, "shift+r")) return { action: "reject-all-in-file" };
   if (matchesKey(data, "v")) return { action: "revise" };
+  if (matchesKey(data, "up")) return { action: "navigate", dir: "prev-hunk" };
+  if (matchesKey(data, "down")) return { action: "navigate", dir: "next-hunk" };
+  if (matchesKey(data, "left")) return { action: "navigate", dir: "prev-file" };
+  if (matchesKey(data, "right")) return { action: "navigate", dir: "next-file" };
   if (matchesKey(data, "q") || matchesKey(data, "escape")) return { action: "quit" };
   return null;
 }
@@ -83,6 +87,9 @@ export class ReviewComponent implements Component, Focusable {
   private currentFile: FileChange | null = null;
   private currentHunk: Hunk | null = null;
   private currentHunkIndex = 0;
+  private currentStatus: HunkView["status"] = "open";
+  private openFilePos = 1;
+  private openFileCount = 1;
   private renderedLines: string[] = [];
 
   private reviseText = "";
@@ -127,12 +134,15 @@ export class ReviewComponent implements Component, Focusable {
     }
   }
 
-  private async decide(file: FileChange, hunk: Hunk): Promise<HunkActionDecision> {
-    this.currentFile = file;
-    this.currentHunk = hunk;
-    this.currentHunkIndex = file.hunks.indexOf(hunk);
+  private async decide(view: HunkView): Promise<HunkActionDecision> {
+    this.currentFile = view.file;
+    this.currentHunk = view.hunk;
+    this.currentHunkIndex = view.hunkIndex;
+    this.currentStatus = view.status;
+    this.openFilePos = view.openFilePos;
+    this.openFileCount = view.openFileCount;
     this.phase = "busy";
-    this.renderedLines = await this.renderHunk(file, hunk);
+    this.renderedLines = await this.renderHunk(view.file, view.hunk);
     this.phase = "hunk";
     this.requestRender();
     return new Promise<HunkActionDecision>((resolve) => {
@@ -157,6 +167,9 @@ export class ReviewComponent implements Component, Focusable {
       case "hunk": {
         const decision = hunkKeyToAction(data);
         if (!decision) return;
+        // Decision keys are inert on an already-decided hunk (it can only be
+        // navigated to or quit from); navigation always works.
+        if (decision.action !== "navigate" && this.currentStatus !== "open") return;
         if (decision.action === "revise") {
           this.reviseText = "";
           this.reviseCursor = 0;
@@ -233,7 +246,7 @@ export class ReviewComponent implements Component, Focusable {
     lines.push(box(""));
 
     const file = this.currentFile;
-    if (this.phase === "hunk" && file && this.currentHunk) {
+    if ((this.phase === "hunk" || this.phase === "busy") && file && this.currentHunk) {
       lines.push(box(` ${this.theme.fg("text", file.path)}`));
       const meta = this.metaLine(file);
       lines.push(box(` ${this.theme.fg("dim", meta)}`));
@@ -281,7 +294,14 @@ export class ReviewComponent implements Component, Focusable {
     const parts: string[] = [];
     if (file.untracked) parts.push("untracked");
     parts.push(file.kind);
-    return `${parts.join(" · ")} — hunk ${this.currentHunkIndex + 1}/${file.hunks.length}`;
+    let meta = `${parts.join(" · ")} — hunk ${this.currentHunkIndex + 1}/${file.hunks.length}`;
+    if (this.openFileCount > 0) {
+      meta += ` · file ${this.openFilePos}/${this.openFileCount}`;
+    }
+    if (this.currentStatus !== "open") {
+      meta += ` · [${this.currentStatus}]`;
+    }
+    return meta;
   }
 
   invalidate(): void {}

@@ -44,7 +44,7 @@ describe("end-to-end review in a real repo", () => {
     // Decide: accept a.ts, reject temp.txt
     const s = await runReview(
       files,
-      async (f) => (f.path === "temp.txt" ? { action: "reject" } : { action: "accept" }),
+      async (v) => (v.file.path === "temp.txt" ? { action: "reject" } : { action: "accept" }),
       gitOps(dir),
     );
 
@@ -79,7 +79,7 @@ describe("end-to-end review in a real repo", () => {
     // Accept hunk 1, reject hunk 2.
     const s = await runReview(
       files,
-      async (_f, h) => (h === a.hunks[1] ? { action: "reject" } : { action: "accept" }),
+      async (v) => (v.hunk === a.hunks[1] ? { action: "reject" } : { action: "accept" }),
       gitOps(dir),
     );
 
@@ -91,6 +91,53 @@ describe("end-to-end review in a real repo", () => {
     expect(s.acceptedHunks).toBe(1);
 
     // cleanup: restore base for the next test
+    run(["checkout", "-q", "--", "a.ts"]);
+  });
+
+  it("navigates with arrows in a real repo (pure viewing cursor)", async () => {
+    run(["checkout", "-q", "--", "a.ts"]);
+    const lines: string[] = [];
+    for (let i = 1; i <= 30; i++) lines.push(`nav${i}`);
+    await writeFile(join(dir, "a.ts"), lines.join("\n") + "\n");
+    run(["add", "a.ts"]);
+    run(["commit", "-q", "-m", "navbase"]);
+    const base = (await readFile(join(dir, "a.ts"), "utf8")).split("\n");
+    base[4] = "nav5-EDIT";
+    base[24] = "nav25-EDIT";
+    await writeFile(join(dir, "a.ts"), base.join("\n") + "\n");
+
+    const { files } = await collectChanges(dir);
+    const a = files.find((f) => f.path === "a.ts")!;
+    expect(a.hunks.length).toBe(2);
+
+    // 1: start at hunk 0, ↑ clamps; 2: still hunk 0, ↓ moves to hunk 1;
+    // 3: back ↑ to hunk 0 (still open); 4: accept hunk 0;
+    // 5: auto-advance hunk 1, ↓ clamps; 6: reject hunk 1.
+    let step = 0;
+    await runReview(
+      files,
+      async (v) => {
+        expect(v.file.path).toBe("a.ts");
+        expect(v.hunkIndex === 0 ? v.status : "open").toBe("open");
+        step++;
+        switch (step) {
+          case 1: return { action: "navigate", dir: "prev-hunk" };
+          case 2: return { action: "navigate", dir: "next-hunk" };
+          case 3: return { action: "navigate", dir: "prev-hunk" };
+          case 4: return { action: "accept" };
+          case 5: return { action: "navigate", dir: "next-hunk" };
+          case 6: return { action: "reject" };
+        }
+        return { action: "quit" };
+      },
+      gitOps(dir),
+    );
+
+    const after = (await readFile(join(dir, "a.ts"), "utf8")).split("\n");
+    expect(after[4]).toBe("nav5-EDIT"); // accepted hunk stays
+    expect(after[24]).toBe("nav25"); // rejected hunk reverted
+
+    // cleanup
     run(["checkout", "-q", "--", "a.ts"]);
   });
 

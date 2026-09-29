@@ -111,6 +111,7 @@ export default function piApprove(pi: ExtensionAPI) {
       if (s.rejectedHunks.length) bits.push(`${s.rejectedHunks.length} hunk(s) rejected`);
       if (s.rejectedFiles.length) bits.push(`${s.rejectedFiles.length} file(s) reset`);
       if (s.deletedFiles.length) bits.push(`${s.deletedFiles.length} deleted`);
+      if (s.skippedHunks) bits.push(`${s.skippedHunks} skipped`);
       ctx.ui.notify(
         bits.length ? `Review complete: ${bits.join(", ")}. Changes remain unstaged.` : "Review complete.",
         "info",

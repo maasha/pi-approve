@@ -2,7 +2,16 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { hunkKeyToAction, formatMenu, ReviewComponent } from "./component.ts";
 import type { HunkActionDecision } from "./types.ts";
 import type { FileChange, Hunk } from "./types.ts";
-import type { GitOps } from "./review.ts";
+import type { GitOps, HunkView } from "./review.ts";
+
+const makeView = (file: FileChange, hunk: Hunk): HunkView => ({
+  file,
+  hunk,
+  hunkIndex: file.hunks.indexOf(hunk),
+  status: "open",
+  openFilePos: 1,
+  openFileCount: 1,
+});
 
 describe("hunkKeyToAction", () => {
   it("maps a to accept", () => {
@@ -33,6 +42,12 @@ describe("hunkKeyToAction", () => {
   });
   it("maps v to revise", () => {
     expect(hunkKeyToAction("v")).toEqual<HunkActionDecision>({ action: "revise" });
+  });
+  it("maps the arrow keys to navigation", () => {
+    expect(hunkKeyToAction("\x1b[A")).toEqual<HunkActionDecision>({ action: "navigate", dir: "prev-hunk" });
+    expect(hunkKeyToAction("\x1b[B")).toEqual<HunkActionDecision>({ action: "navigate", dir: "next-hunk" });
+    expect(hunkKeyToAction("\x1b[D")).toEqual<HunkActionDecision>({ action: "navigate", dir: "prev-file" });
+    expect(hunkKeyToAction("\x1b[C")).toEqual<HunkActionDecision>({ action: "navigate", dir: "next-file" });
   });
   it("maps q or escape to quit", () => {
     expect(hunkKeyToAction("q")).toEqual<HunkActionDecision>({ action: "quit" });
@@ -87,7 +102,7 @@ describe("formatMenu", () => {
 // ---------------------------------------------------------------------------
 describe("ReviewComponent callback `this` binding (regression)", () => {
   let captured: {
-    decide?: (f: FileChange, h: Hunk) => Promise<HunkActionDecision>;
+    decide?: (v: HunkView) => Promise<HunkActionDecision>;
     git?: GitOps;
   };
 
@@ -96,13 +111,14 @@ describe("ReviewComponent callback `this` binding (regression)", () => {
     vi.resetModules();
     const reviewMod = await import("./review.ts");
     vi.spyOn(reviewMod, "runReview").mockImplementation(async (...args) => {
-      captured.decide = args[1] as (f: FileChange, h: Hunk) => Promise<HunkActionDecision>;
+      captured.decide = args[1] as (v: HunkView) => Promise<HunkActionDecision>;
       captured.git = args[2] as GitOps;
       return {
         rejectedFiles: [],
         rejectedHunks: [],
         deletedFiles: [],
         acceptedHunks: 0,
+        skippedHunks: 0,
         quit: false,
         revised: null,
       };
@@ -162,7 +178,7 @@ describe("ReviewComponent callback `this` binding (regression)", () => {
     } as FileChange;
 
     // Engine calls the captured reference without the component as receiver.
-    const p = Promise.resolve().then(() => decide.call(undefined, file, file.hunks[0]!));
+    const p = Promise.resolve().then(() => decide.call(undefined, makeView(file, file.hunks[0]!)));
     expect(await settle(p)).toBe("pending");
   });
 });

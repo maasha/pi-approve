@@ -38,13 +38,19 @@ export interface Hunk {
   binary?: boolean;
 }
 
-export type HunkAction = "accept" | "reject" | "revise" | "accept-all-in-file" | "reject-all-in-file" | "quit";
+export type HunkAction =
+  | "accept"
+  | "reject"
+  | "revise"
+  | "accept-all-in-file"
+  | "reject-all-in-file"
+  | "navigate"
+  | "quit";
 
-export interface HunkActionDecision {
-  action: HunkAction;
-  /** Free-text feedback for the "revise" action. */
-  feedback?: string;
-}
+export type HunkActionDecision =
+  | { action: "revise"; feedback?: string }
+  | { action: "navigate"; dir: "prev-hunk" | "next-hunk" | "prev-file" | "next-file" }
+  | { action: Exclude<HunkAction, "revise" | "navigate"> };
 
 export type FileDecision =
   | { path: string; decision: "accepted" }

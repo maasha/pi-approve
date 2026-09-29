@@ -72,16 +72,21 @@ When you run `/approve`, a modal overlay appears for each diff hunk:
 | `r` | **Reject** this hunk — reverses only that hunk on disk (preserving staged changes and the file's other hunks) |
 | `R` | **Reject all hunks** in this file (resets it to the index) |
 | `v` | **Revise** — type feedback, which is sent to the agent immediately; review stops and you re-run `/approve` later |
+| `↑` / `↓` | Previous / next **hunk** (may land on an already-decided hunk, which is shown but inert) |
+| `←` / `→` | Previous / next **open file** (a file with undecided hunks); skips fully-decided files |
 | `q` | Quit the review |
 | `Esc` | Quit the review (also cancels the revise prompt). Not shown in the on-screen menu, but works. |
 
-The arrow keys (`↑ ↓ ← →`) are shown in the menu but not yet functional — free navigation (a pure viewing cursor that never accepts or rejects) is planned.
+Navigation never accepts or rejects — it only moves the viewing cursor. The meta line shows
+a live `file X/Y` counter: **Y** is the number of files with at least one undecided hunk,
+and it decreases as files get fully decided. The review auto-closes when every hunk has been
+decided; quitting early leaves undecided hunks untouched on disk.
 
 ## How it works
 
 1. The extension runs `git diff` to collect tracked-file modifications (unstaged changes only — staged changes are already approved and excluded) and `git ls-files --others --exclude-standard` to find untracked files.
 2. It parses the diff into hunks and feeds each hunk's code body to Shiki for syntax highlighting (diff prefixes `+`/`-`/\  are stripped before highlighting, then re-added in Pi's theme colors).
-3. You review hunks in a modal overlay. Accepted hunks stay on disk; rejecting a hunk reverses just that hunk (other hunks and staged changes are untouched); `R` resets a file to the index; rejected untracked files are deleted.
+3. You review hunks in a modal overlay. Accepted hunks stay on disk; rejecting a hunk reverses just that hunk (other hunks and staged changes are untouched); `R` resets a file to the index; rejected untracked files are deleted. You can navigate freely with the arrow keys — a hunk stays undecided until you act on it, and already-decided hunks remain viewable (but inert).
 4. When all hunks are resolved, the overlay closes and you're back at the prompt.
 
 ## Requirements
