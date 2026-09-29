@@ -1,0 +1,9 @@
+{
+  "name": "pi-approve",
+  "version": "0.1.0",
+  "description": "Pi extension to review and approve working tree changes before staging",
+  "main": "src/index.ts",
+  "dependencies": {
+    "shiki": "^1.0.0"
+  }
+}
