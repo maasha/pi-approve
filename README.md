@@ -12,7 +12,7 @@ After the agent edits your files, run `/approve` to walk through each diff hunk 
 - **Syntax highlighting** — diff hunks are rendered with [Shiki](https://shiki.style/) (the same engine VS Code uses) using the `dark-plus` theme
 - **Revision requests** — ask the agent to fix a hunk inline; the review pauses, the agent gets your feedback, and you re-run `/approve` when done
 - **Untracked files** — new files are shown as whole-file hunks and can be approved or deleted
-- **Per-hunk revert** — rejecting a hunk reverses only that hunk (via a reconstructed single-hunk patch), while `d`/`--reject-all` reset the whole file to the index; staged changes are never touched
+- **Per-hunk revert** — rejecting a hunk reverses only that hunk (via a reconstructed single-hunk patch), while `R`/`--reject-all` reset the whole file to the index; staged changes are never touched
 
 ## Installation
 
@@ -59,27 +59,25 @@ When you run `/approve`, a modal overlay appears for each diff hunk:
 │    const lines = tokens.map(...)                                        │
 │                                                                         │
 │ ────────────────────────────────────────────────────────────────────────│
-│  Actions: [a] Accept  [r] Reject  [v] Revise                          │
-│  [f] Accept all in file  [d] Reject all in file                       │
-│  [↑↓] Scroll  [Esc/q] Quit                                            │
+│  [a] accept · [A] accept file · [r] reject · [R] reject file · [v] revise · [q] quit │
 ╰─────────────────────────────────────────────────────────────────────────╯
 ```
 
 | Key | Action |
 |---|---|
 | `a` | **Accept** this hunk |
+| `A` | **Accept all remaining hunks** in this file |
 | `r` | **Reject** this hunk — reverses only that hunk on disk (preserving staged changes and the file's other hunks) |
+| `R` | **Reject all hunks** in this file (resets it to the index) |
 | `v` | **Revise** — type feedback, which is sent to the agent immediately; review stops and you re-run `/approve` later |
-| `f` | **Accept all remaining hunks** in this file |
-| `d` | **Reject all hunks** in this file |
-| `↑` / `↓` | Scroll long diffs |
-| `Esc` / `q` | Quit the review |
+| `q` | Quit the review |
+| `Esc` | Quit the review (also cancels the revise prompt). Not shown in the on-screen menu, but works. |
 
 ## How it works
 
 1. The extension runs `git diff` to collect tracked-file modifications (unstaged changes only — staged changes are already approved and excluded) and `git ls-files --others --exclude-standard` to find untracked files.
 2. It parses the diff into hunks and feeds each hunk's code body to Shiki for syntax highlighting (diff prefixes `+`/`-`/\  are stripped before highlighting, then re-added in Pi's theme colors).
-3. You review hunks in a modal overlay. Accepted hunks stay on disk; rejecting a hunk reverses just that hunk (other hunks and staged changes are untouched); `d` resets a file to the index; rejected untracked files are deleted.
+3. You review hunks in a modal overlay. Accepted hunks stay on disk; rejecting a hunk reverses just that hunk (other hunks and staged changes are untouched); `R` resets a file to the index; rejected untracked files are deleted.
 4. When all hunks are resolved, the overlay closes and you're back at the prompt.
 
 ## Requirements
@@ -91,7 +89,7 @@ When you run `/approve`, a modal overlay appears for each diff hunk:
 ## Known limitations
 
 - **Theme**: Shiki uses the fixed `dark-plus` palette. It does not automatically match Pi's active terminal theme.
-- **Rejection granularity**: `r` reverses only the hunk you reject — previously accepted hunks in the same file are kept. `d` (and `--reject-all`) reset the whole file's working tree to the *index*, preserving staged changes. Neither operation modifies the index, so staged (already approved) changes are never at risk.
+- **Rejection granularity**: `r` reverses only the hunk you reject — previously accepted hunks in the same file are kept. `R` (and `--reject-all`) reset the whole file's working tree to the *index*, preserving staged changes. Neither operation modifies the index, so staged (already approved) changes are never at risk.
 - **Untracked directories**: Only untracked *files* are shown. Empty directories or directories containing only other empty directories are invisible to git and therefore to this extension.
 - **Mode-only changes**: `chmod` / `chown` changes do not appear in `git diff` and are not reviewed.
 - **Binary files**: Shown as `[Binary file]` — you can accept or reject them but not preview their contents.

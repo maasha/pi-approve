@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { hunkKeyToAction, ReviewComponent } from "./component.ts";
+import { hunkKeyToAction, formatMenu, ReviewComponent } from "./component.ts";
 import type { HunkActionDecision } from "./types.ts";
 import type { FileChange, Hunk } from "./types.ts";
 import type { GitOps } from "./review.ts";
@@ -8,17 +8,28 @@ describe("hunkKeyToAction", () => {
   it("maps a to accept", () => {
     expect(hunkKeyToAction("a")).toEqual<HunkActionDecision>({ action: "accept" });
   });
-  it("maps return/enter to accept (default)", () => {
-    expect(hunkKeyToAction("\r")).toEqual<HunkActionDecision>({ action: "accept" });
+  it("does NOT default accept on return/enter", () => {
+    expect(hunkKeyToAction("\r")).toBeNull();
+    expect(hunkKeyToAction("\n")).toBeNull();
   });
-  it("maps f to accept-all-in-file", () => {
-    expect(hunkKeyToAction("f")).toEqual<HunkActionDecision>({ action: "accept-all-in-file" });
+  it("maps A (shift+a) to accept-all-in-file", () => {
+    expect(hunkKeyToAction("A")).toEqual<HunkActionDecision>({ action: "accept-all-in-file" });
+  });
+  it("maps A via kitty CSI-u sequence to accept-all-in-file", () => {
+    expect(hunkKeyToAction("\x1b[97;2u")).toEqual<HunkActionDecision>({ action: "accept-all-in-file" });
   });
   it("maps r to reject", () => {
     expect(hunkKeyToAction("r")).toEqual<HunkActionDecision>({ action: "reject" });
   });
-  it("maps d to reject-all-in-file", () => {
-    expect(hunkKeyToAction("d")).toEqual<HunkActionDecision>({ action: "reject-all-in-file" });
+  it("maps R (shift+r) to reject-all-in-file", () => {
+    expect(hunkKeyToAction("R")).toEqual<HunkActionDecision>({ action: "reject-all-in-file" });
+  });
+  it("maps R via kitty CSI-u sequence to reject-all-in-file", () => {
+    expect(hunkKeyToAction("\x1b[114;2u")).toEqual<HunkActionDecision>({ action: "reject-all-in-file" });
+  });
+  it("no longer maps f or d to file actions", () => {
+    expect(hunkKeyToAction("f")).toBeNull();
+    expect(hunkKeyToAction("d")).toBeNull();
   });
   it("maps v to revise", () => {
     expect(hunkKeyToAction("v")).toEqual<HunkActionDecision>({ action: "revise" });
@@ -30,6 +41,36 @@ describe("hunkKeyToAction", () => {
   it("ignores unrelated keys", () => {
     expect(hunkKeyToAction("z")).toBeNull();
     expect(hunkKeyToAction("x")).toBeNull();
+  });
+});
+
+describe("formatMenu", () => {
+  const theme = { fg: (_c: string, s: string) => s };
+
+  it("fits on one line when there is enough width", () => {
+    const lines = formatMenu(theme, 120);
+    expect(lines).toHaveLength(1);
+    const l = lines[0]!;
+    expect(l).toContain("[a] accept");
+    expect(l).toContain("[A] accept file");
+    expect(l).toContain("[r] reject");
+    expect(l).toContain("[R] reject file");
+    expect(l).toContain("[v] revise");
+    expect(l).toContain("[q] quit");
+    expect(l).not.toContain("Esc");
+    expect(l).not.toContain("default");
+  });
+
+  it("wraps to two lines when the width is too small", () => {
+    const lines = formatMenu(theme, 40);
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain("[a] accept");
+    expect(lines[1]).toContain("[q] quit");
+    // Every item appears exactly once across the two lines.
+    const joined = lines.join("\n");
+    for (const item of ["[a] accept", "[A] accept file", "[r] reject", "[R] reject file", "[v] revise", "[q] quit"]) {
+      expect(joined.split(item).length - 1).toBe(1);
+    }
   });
 });
 

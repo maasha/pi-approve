@@ -7,7 +7,7 @@
 
 - **Code Change**: New, updated, deleted, or renamed code visible in `git diff` (working tree vs. index, i.e. unstaged changes). Staged changes are excluded. Includes tracked file modifications, tracked file deletions, and untracked files.
 - **Hunk**: The atomic unit of review. For tracked files, a hunk is a single contiguous diff block. For deleted tracked files, the entire deletion is one hunk. For untracked files, the entire file is one hunk.
-- **Per-Hunk Revert**: Rejecting a hunk reverses *only that hunk* via a reconstructed single-hunk patch (`git apply --reject`). Other hunks in the same file remain on disk, and the index is never touched — so staged changes are preserved without any prompt. (If the patch cannot be applied cleanly, the fallback is a whole-file reset to the index.) **Reject all in file** (`d`) and `--reject-all` instead reset the file's entire working tree to the index via `git checkout -- <file>`, which likewise preserves staged changes.
+- **Per-Hunk Revert**: Rejecting a hunk reverses *only that hunk* via a reconstructed single-hunk patch (`git apply --reject`). Other hunks in the same file remain on disk, and the index is never touched — so staged changes are preserved without any prompt. (If the patch cannot be applied cleanly, the fallback is a whole-file reset to the index.) **Reject all in file** (`R`) and `--reject-all` instead reset the file's entire working tree to the index via `git checkout -- <file>`, which likewise preserves staged changes.
 
 ## Requirements
 
@@ -63,14 +63,21 @@ Reject all pending changes. For tracked files, `git checkout --` each modified f
 
 | Action | Immediate Effect | File State After |
 |---|---|---|
-| **Accept** | Hunk stays on disk. | File remains modified (or stays as untracked for new files). |
-| **Accept all in file** (`f`) | All hunks in the current file (already reviewed and not yet seen) are accepted. The overlay advances to the next file. | File remains modified. |
+| **Accept** (`a`) | Hunk stays on disk. | File remains modified (or stays as untracked for new files). |
+| **Accept all in file** (`A`) | All hunks in the current file (already reviewed and not yet seen) are accepted. The overlay advances to the next file. | File remains modified. |
 | **Reject** (`r`) | For tracked files: the single hunk is reversed on disk via `git apply --reverse` of a reconstructed hunk patch; other hunks and any staged changes are untouched. If the patch fails to apply, the whole file is reset to the index and a warning is shown. For untracked files: file is deleted from disk (a single-hunk undo is impossible). | File otherwise unchanged (or no longer exists). |
-| **Reject all in file** (`d`) | The file's working tree is reset to the index (`git checkout -- <file>`) or the untracked file is deleted. All hunks in this file are discarded. Remaining hunks are skipped. | File restored to index state (or no longer exists). |
-| **Revise** | Hunk stays on disk. The user's feedback is sent as a user message to the model, triggering a new agent turn. | File remains modified. The model may change it further. |
-| **Quit** | Review ends immediately. All prior decisions (acceptances and rejections) are preserved. Unreviewed hunks remain untouched. | Working tree reflects all decisions made so far. Re-run `/approve` to review remaining hunks. |
+| **Reject all in file** (`R`) | The file's working tree is reset to the index (`git checkout -- <file>`) or the untracked file is deleted. All hunks in this file are discarded. Remaining hunks are skipped. | File restored to index state (or no longer exists). |
+| **Revise** (`v`) | Hunk stays on disk. The user's feedback is sent as a user message to the model, triggering a new agent turn. | File remains modified. The model may change it further. |
+| **Quit** (`q`, and hidden `Esc`) | Review ends immediately. All prior decisions (acceptances and rejections) are preserved. Unreviewed hunks remain untouched. | Working tree reflects all decisions made so far. Re-run `/approve` to review remaining hunks. |
 
-**Important**: Rejecting a hunk (`r`) affects only that hunk — previously accepted hunks in the same file are not touched. Only **Reject all in file** (`d`) resets the whole file.
+**Key bindings and menu**: The in-overlay menu reads
+`[a] accept · [A] accept file · [r] reject · [R] reject file · [v] revise · [q] quit`.
+There is **no default action** — Enter does nothing in the hunk view, so nothing can be
+accidentally accepted. `Esc` is not shown in the menu (to keep it short) but still quits;
+it is documented in the README. The menu renders on a single line when the overlay is wide
+enough and wraps to two lines otherwise.
+
+**Important**: Rejecting a hunk (`r`) affects only that hunk — previously accepted hunks in the same file are not touched. Only **Reject all in file** (`R`) resets the whole file.
 
 ## Revise Flow
 

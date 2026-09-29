@@ -1,5 +1,8 @@
 import type { Token } from "./render.ts";
 
+/** Shiki theme used for diff highlighting (dark, VS Code dark-plus palette). */
+const THEME = "dark-plus";
+
 /** The subset of the Shiki highlighter surface we use. */
 export interface CoreHighlighter {
   codeToTokens(
@@ -13,7 +16,6 @@ export type CreateHighlighter = (opts: {
   langs: string[];
 }) => Promise<CoreHighlighter>;
 
-export const THEME = "dark-plus";
 
 /**
  * A lazily-initialised highlighter backed by Shiki's `createdBundledHighlighter`
@@ -27,7 +29,7 @@ export class Highlighter {
   private core: CoreHighlighter | null = null;
   private initPromise: Promise<void> | null = null;
 
-  constructor(private readonly create: CreateHighlighter | null) {}
+  constructor(private readonly create: CreateHighlighter | null) { }
 
   /** Ensure the core is initialised for the given set of languages. */
   async ensure(langs: string[]): Promise<void> {

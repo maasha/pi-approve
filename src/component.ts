@@ -26,14 +26,30 @@ export interface ReviewResult {
 
 /** Map a single keystroke during the hunk view to a decision, or null to ignore. */
 export function hunkKeyToAction(data: string): HunkActionDecision | null {
-  if (matchesKey(data, "return")) return { action: "accept" }; // Enter = default accept
   if (matchesKey(data, "a")) return { action: "accept" };
-  if (matchesKey(data, "f")) return { action: "accept-all-in-file" };
+  if (matchesKey(data, "shift+a")) return { action: "accept-all-in-file" };
   if (matchesKey(data, "r")) return { action: "reject" };
-  if (matchesKey(data, "d")) return { action: "reject-all-in-file" };
+  if (matchesKey(data, "shift+r")) return { action: "reject-all-in-file" };
   if (matchesKey(data, "v")) return { action: "revise" };
   if (matchesKey(data, "q") || matchesKey(data, "escape")) return { action: "quit" };
   return null;
+}
+
+/**
+ * Render the key-binding menu. Fits on one line when `innerWidth` is wide
+ * enough; otherwise wraps after "[r] reject". Esc is intentionally not shown
+ * (it still quits); it is documented in the README instead.
+ */
+export function formatMenu(theme: { fg(color: string, text: string): string }, innerWidth: number): string[] {
+  const parts = [
+    `${theme.fg("success", "[a] accept")} ${theme.fg("dim", "·")} ${theme.fg("success", "[A] accept file")}`,
+    `${theme.fg("error", "[r] reject")} ${theme.fg("dim", "·")} ${theme.fg("error", "[R] reject file")}`,
+    `${theme.fg("warning", "[v] revise")} ${theme.fg("dim", "·")} ${theme.fg("dim", "[q] quit")}`,
+  ];
+  const line1 = parts[0]!;
+  const rest = parts.slice(1).join(" ");
+  const fits = visibleWidth(line1) + 1 + visibleWidth(rest) <= innerWidth;
+  return fits ? [line1 + " " + rest] : [line1, rest];
 }
 
 type Phase = "busy" | "hunk" | "revise" | "done";
@@ -215,21 +231,9 @@ export class ReviewComponent implements Component, Focusable {
         lines.push(box(l));
       }
       lines.push(box(""));
-      lines.push(
-        box(
-          ` ${this.theme.fg("success", "[a]ccept")} ${this.theme.fg("dim", "default: ")}${this.theme.fg("success", "accept")}`,
-        ),
-      );
-      lines.push(
-        box(
-          ` ${this.theme.fg("success", "[f]")} accept file · ${this.theme.fg("error", "[r]")} reject hunk · ${this.theme.fg("error", "[d]")} reject file`,
-        ),
-      );
-      lines.push(
-        box(
-          ` ${this.theme.fg("warning", "[v]")} revise · ${this.theme.fg("dim", "[q]")} quit · ${this.theme.fg("dim", "Esc")}`,
-        ),
-      );
+      for (const menuLine of formatMenu(this.theme, inner)) {
+        lines.push(box(` ${menuLine}`));
+      }
       lines.push(box(""));
     } else if (this.phase === "revise" && file) {
       lines.push(box(` ${this.theme.fg("text", file.path)}`));
