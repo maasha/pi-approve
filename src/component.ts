@@ -36,14 +36,7 @@ export function hunkKeyToAction(data: string): HunkActionDecision | null {
   return null;
 }
 
-/** Map a keystroke during the staged-changes confirmation to yes/no, or null. */
-export function confirmKeyToChoice(data: string): boolean | null {
-  if (matchesKey(data, "y") || matchesKey(data, "return")) return true;
-  if (matchesKey(data, "n") || matchesKey(data, "escape")) return false;
-  return null;
-}
-
-type Phase = "busy" | "hunk" | "revise" | "confirm" | "done";
+type Phase = "busy" | "hunk" | "revise" | "done";
 
 /**
  * The interactive review overlay. It drives the (unit-tested) `runReview`
@@ -65,10 +58,7 @@ export class ReviewComponent implements Component, Focusable {
   private reviseText = "";
   private reviseCursor = 0;
 
-  private confirmPath: string | null = null;
-
   private pendingDecide: ((d: HunkActionDecision) => void) | null = null;
-  private pendingConfirm: ((b: boolean) => void) | null = null;
 
   constructor(
     private readonly tui: TUI,
@@ -76,7 +66,6 @@ export class ReviewComponent implements Component, Focusable {
     private readonly _keybindings: KeybindingsManager,
     private readonly finish: (result: ReviewResult | undefined) => void,
     private readonly files: FileChange[],
-    private readonly stagedPaths: Set<string>,
     private readonly git: GitOps,
     private readonly highlighter: Highlighter,
   ) {
@@ -94,12 +83,7 @@ export class ReviewComponent implements Component, Focusable {
   private async start(): Promise<void> {
     // Bind explicitly: passing a bare method reference (`this.decide`) would
     // detach `this` in strict-mode ESM and crash when the engine invokes it.
-    const summary = await runReview(
-      this.files,
-      this.stagedPaths,
-      this.decide.bind(this),
-      { ...this.git, confirmDiscardStaged: this.confirmDiscardStaged.bind(this) },
-    );
+    const summary = await runReview(this.files, this.decide.bind(this), this.git);
     let revisedMessage: string | null = null;
     if (summary.revised) {
       const { file, hunk, feedback } = summary.revised;
@@ -123,15 +107,6 @@ export class ReviewComponent implements Component, Focusable {
     this.requestRender();
     return new Promise<HunkActionDecision>((resolve) => {
       this.pendingDecide = resolve;
-    });
-  }
-
-  private async confirmDiscardStaged(path: string): Promise<boolean> {
-    this.confirmPath = path;
-    this.phase = "confirm";
-    this.requestRender();
-    return new Promise<boolean>((resolve) => {
-      this.pendingConfirm = resolve;
     });
   }
 
@@ -201,17 +176,6 @@ export class ReviewComponent implements Component, Focusable {
         return;
       }
 
-      case "confirm": {
-        const choice = confirmKeyToChoice(data);
-        if (choice === null) return;
-        this.phase = "busy";
-        this.requestRender();
-        const p = this.pendingConfirm;
-        this.pendingConfirm = null;
-        p?.(choice);
-        return;
-      }
-
       default:
         return;
     }
@@ -258,7 +222,7 @@ export class ReviewComponent implements Component, Focusable {
       );
       lines.push(
         box(
-          ` ${this.theme.fg("success", "[f]")} accept file · ${this.theme.fg("error", "[r]")} reject · ${this.theme.fg("error", "[d]")} reject file`,
+          ` ${this.theme.fg("success", "[f]")} accept file · ${this.theme.fg("error", "[r]")} reject hunk · ${this.theme.fg("error", "[d]")} reject file`,
         ),
       );
       lines.push(
@@ -283,26 +247,6 @@ export class ReviewComponent implements Component, Focusable {
         ),
       );
       lines.push(box(""));
-    } else if (this.phase === "confirm" && this.confirmPath) {
-      lines.push(box(` ${this.theme.fg("warning", "⚠ Staged changes warning")}`));
-      lines.push(box(` ${this.theme.fg("text", this.confirmPath)}`));
-      lines.push(box(""));
-      lines.push(
-        box(
-          ` ${this.theme.fg("error", "This file has staged (already approved) changes.")}`,
-        ),
-      );
-      lines.push(
-        box(` ${this.theme.fg("error", "Rejecting it will discard those staged changes.")}`),
-      );
-      lines.push(box(""));
-      lines.push(
-        box(
-          ` ${this.theme.fg("success", "[y]")} yes, discard · ${this.theme.fg("dim", "[n]")} no (skip)` +
-            ` ${this.theme.fg("dim", "(Esc)")}`,
-        ),
-      );
-      lines.push(box(""));
     } else if (this.phase === "busy") {
       lines.push(box(` ${this.theme.fg("dim", "…")}`));
       lines.push(box(""));
@@ -319,12 +263,17 @@ export class ReviewComponent implements Component, Focusable {
     const parts: string[] = [];
     if (file.untracked) parts.push("untracked");
     parts.push(file.kind);
-    if (this.stagedPaths.has(file.path)) parts.push("has staged changes");
     return `${parts.join(" · ")} — hunk ${this.currentHunkIndex + 1}/${file.hunks.length}`;
   }
 
   invalidate(): void {}
   dispose(): void {
+    // Never leave the engine suspended.
+    if (this.pendingDecide) {
+      const p = this.pendingDecide;
+      this.pendingDecide = null;
+      p({ action: "quit" });
+    }
     if (!this.doneCalled) {
       this.doneCalled = true;
       this.finish(undefined);

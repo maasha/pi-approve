@@ -17,6 +17,8 @@ export interface FileChange {
   /** The Shiki language id used to highlight this file's hunks. */
   language: string;
   hunks: Hunk[];
+  /** True when the unstaged change IS the file's deletion (file absent from working tree). */
+  deleted?: boolean;
 }
 
 /** The atomic unit of review. */
@@ -27,6 +29,12 @@ export interface Hunk {
   lines: string[];
   /** First 1-based line number of the new file covered by this hunk. */
   newStart: number;
+  /** First 1-based line number of the old (index) file covered by this hunk. */
+  oldStart: number;
+  /** Number of old (index) lines in the hunk, from its header. 0 for untracked/binary. */
+  oldCount: number;
+  /** Number of new (working tree) lines in the hunk, from its header. 0 for untracked/binary. */
+  newCount: number;
   binary?: boolean;
 }
 

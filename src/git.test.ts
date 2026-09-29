@@ -34,13 +34,12 @@ describe("isGitRepo", () => {
 describe("collectChanges", () => {
   it("collects an unstaged tracked modification as a modified change", async () => {
     await writeFile(join(dir, "base.txt"), "hello\nworld\n");
-    const { files, stagedPaths } = await collectChanges(dir);
+    const { files } = await collectChanges(dir);
     const base = files.find((f) => f.path === "base.txt");
     expect(base).toBeDefined();
     expect(base!.untracked).toBe(false);
     expect(base!.kind).toBe("modified");
     expect(base!.hunks[0]!.lines.some((l) => l.startsWith("+"))).toBe(true);
-    expect(stagedPaths.has("base.txt")).toBe(false);
   });
 
   it("collects an untracked file as a whole-file added change", async () => {
@@ -62,20 +61,22 @@ describe("collectChanges", () => {
     expect(files.find((f) => f.path === "secret.log")).toBeUndefined();
   });
 
-  it("marks files that also have staged changes", async () => {
+  it("only shows the unstaged delta when a staged change also exists", async () => {
     run(["checkout", "-q", "--", "base.txt"], dir);
+    run(["reset", "-q", "base.txt"], dir);
     // staged change
     await writeFile(join(dir, "base.txt"), "A\n");
     run(["add", "base.txt"], dir);
     // further unstaged change
     await writeFile(join(dir, "base.txt"), "A\nB\n");
-    const { files, stagedPaths } = await collectChanges(dir);
+    const { files } = await collectChanges(dir);
     const base = files.find((f) => f.path === "base.txt");
     expect(base).toBeDefined();
-    expect(stagedPaths.has("base.txt")).toBe(true);
     // the unstaged diff is only the B line
     expect(base!.hunks[0]!.lines.some((l) => l.includes("B"))).toBe(true);
-    expect(base!.hunks[0]!.lines.some((l) => l.includes("A\n"))).toBe(false);
+    expect(base!.hunks[0]!.lines.some((l) => l === "+A")).toBe(false);
+    run(["reset", "-q", "base.txt"], dir);
+    run(["checkout", "-q", "--", "base.txt"], dir);
   });
 
   it("classifies an unstaged deletion of a tracked file", async () => {
@@ -99,8 +100,7 @@ describe("collectChanges", () => {
         await rm(join(dir, p));
       } catch {}
     }
-    const { files, stagedPaths } = await collectChanges(dir);
+    const { files } = await collectChanges(dir);
     expect(files).toEqual([]);
-    expect(stagedPaths.size).toBe(0);
   });
 });

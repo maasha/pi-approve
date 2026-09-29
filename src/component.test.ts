@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { hunkKeyToAction, confirmKeyToChoice, ReviewComponent } from "./component.ts";
+import { hunkKeyToAction, ReviewComponent } from "./component.ts";
 import type { HunkActionDecision } from "./types.ts";
 import type { FileChange, Hunk } from "./types.ts";
 import type { GitOps } from "./review.ts";
@@ -33,30 +33,13 @@ describe("hunkKeyToAction", () => {
   });
 });
 
-describe("confirmKeyToChoice", () => {
-  it("y maps to true", () => {
-    expect(confirmKeyToChoice("y")).toBe(true);
-  });
-  it("return maps to true (default yes)", () => {
-    expect(confirmKeyToChoice("\r")).toBe(true);
-  });
-  it("n or escape maps to false", () => {
-    expect(confirmKeyToChoice("n")).toBe(false);
-    expect(confirmKeyToChoice("\x1b")).toBe(false);
-  });
-  it("ignores unrelated keys", () => {
-    expect(confirmKeyToChoice("z")).toBeNull();
-  });
-});
-
 // ---------------------------------------------------------------------------
-// Regression: the `decide` and `confirmDiscardStaged` callbacks handed to
-// runReview must retain the component as `this`. Passing a bare method
-// reference (e.g. `this.decide`) detaches `this` under strict-mode ESM, so
-// the engine's call throws
+// Regression: the `decide` callback handed to runReview must retain the
+// component as `this`. Passing a bare method reference (e.g. `this.decide`)
+// detaches `this` under strict-mode ESM, so the engine's call throws
 //   "Cannot set properties of undefined (setting 'currentFile')"
-// and crashes pi. We spy on runReview to capture the exact callbacks the
-// component hands off, then invoke them the same way the engine does —
+// and crashes pi. We spy on runReview to capture the exact callback the
+// component hands off, then invoke it the same way the engine does —
 // with a detached receiver.
 // ---------------------------------------------------------------------------
 describe("ReviewComponent callback `this` binding (regression)", () => {
@@ -70,10 +53,11 @@ describe("ReviewComponent callback `this` binding (regression)", () => {
     vi.resetModules();
     const reviewMod = await import("./review.ts");
     vi.spyOn(reviewMod, "runReview").mockImplementation(async (...args) => {
-      captured.decide = args[2] as (f: FileChange, h: Hunk) => Promise<HunkActionDecision>;
-      captured.git = args[3] as GitOps;
+      captured.decide = args[1] as (f: FileChange, h: Hunk) => Promise<HunkActionDecision>;
+      captured.git = args[2] as GitOps;
       return {
         rejectedFiles: [],
+        rejectedHunks: [],
         deletedFiles: [],
         acceptedHunks: 0,
         quit: false,
@@ -89,7 +73,7 @@ describe("ReviewComponent callback `this` binding (regression)", () => {
       untracked: false,
       kind: "modified",
       language: "plaintext",
-      hunks: [{ header: null, lines: ["+x"], newStart: 1 }],
+      hunks: [{ header: null, lines: ["+x"], newStart: 1, oldStart: 0, oldCount: 0, newCount: 1 }],
     };
     const highlighter = {
       ensure: async () => {},
@@ -103,11 +87,10 @@ describe("ReviewComponent callback `this` binding (regression)", () => {
       null as never, // KeybindingsManager
       () => {}, // finish
       [file], // files
-      new Set(), // stagedPaths
       {
+        rejectHunk: async () => true,
         resetTracked: async () => {},
         removeUntracked: async () => {},
-        confirmDiscardStaged: async () => true,
       }, // git
       highlighter as never, // Highlighter
     );
@@ -132,17 +115,11 @@ describe("ReviewComponent callback `this` binding (regression)", () => {
       untracked: false,
       kind: "modified",
       language: "plaintext",
-      hunks: [{ header: null, lines: ["+x"], newStart: 1 }],
+      hunks: [{ header: null, lines: ["+x"], newStart: 1, oldStart: 0, oldCount: 0, newCount: 1 }],
     } as FileChange;
 
     // Engine calls the captured reference without the component as receiver.
     const p = Promise.resolve().then(() => decide.call(undefined, file, file.hunks[0]!));
-    expect(await settle(p)).toBe("pending");
-  });
-
-  it("confirmDiscardStaged() survives a detached-this call (waits for input, no TypeError)", async () => {
-    const confirm = captured.git!.confirmDiscardStaged;
-    const p = Promise.resolve().then(() => confirm.call(undefined, "a.ts"));
     expect(await settle(p)).toBe("pending");
   });
 });

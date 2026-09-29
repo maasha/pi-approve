@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { resolve } from "node:path";
 import { parseArgs } from "./args.ts";
-import { collectChanges, isGitRepo, resetTracked, removeUntracked } from "./git.ts";
+import { collectChanges, isGitRepo, resetTracked, removeUntracked, rejectHunk } from "./git.ts";
 import type { GitOps } from "./review.ts";
 import { ReviewComponent, type ReviewResult } from "./component.ts";
 import { getDefaultHighlighter } from "./highlight.ts";
@@ -33,13 +33,9 @@ export default function piApprove(pi: ExtensionAPI) {
       }
 
       const git: GitOps = {
+        rejectHunk: (p, f, h) => rejectHunk(dir, f, h),
         resetTracked: (p) => resetTracked(dir, p),
         removeUntracked: (p) => removeUntracked(dir, p),
-        confirmDiscardStaged: async (p) =>
-          await ctx.ui.confirm(
-            "Staged changes warning",
-            `${p} has staged (already approved) changes. Rejecting will discard them. Continue?`,
-          ),
       };
 
       // ---- Bulk: --all -----------------------------------------------------
@@ -57,21 +53,10 @@ export default function piApprove(pi: ExtensionAPI) {
 
       // ---- Bulk: --reject-all ---------------------------------------------
       if (parsed.rejectAll) {
-        const { files, stagedPaths } = await collectChanges(dir);
+        const { files } = await collectChanges(dir);
         if (files.length === 0) {
           ctx.ui.notify("No changes to reject.", "info");
           return;
-        }
-        const risky = files.filter((f) => !f.untracked && stagedPaths.has(f.path)).map((f) => f.path);
-        if (risky.length > 0) {
-          const ok = await ctx.ui.confirm(
-            "Staged changes warning",
-            `These files have staged (already approved) changes that will be discarded:\n${risky.join("\n")}\n\nContinue?`,
-          );
-          if (!ok) {
-            ctx.ui.notify("Reject-all cancelled.", "warning");
-            return;
-          }
         }
         for (const f of files) {
           if (f.untracked) await git.removeUntracked(f.path);
@@ -87,7 +72,7 @@ export default function piApprove(pi: ExtensionAPI) {
         return;
       }
 
-      const { files, stagedPaths } = await collectChanges(dir);
+      const { files } = await collectChanges(dir);
       if (files.length === 0) {
         ctx.ui.notify("No changes to review.", "info");
         return;
@@ -104,7 +89,6 @@ export default function piApprove(pi: ExtensionAPI) {
             keybindings,
             done,
             sorted,
-            stagedPaths,
             git,
             getDefaultHighlighter(),
           ),
@@ -124,7 +108,8 @@ export default function piApprove(pi: ExtensionAPI) {
       const s = result.summary;
       const bits: string[] = [];
       if (s.acceptedHunks) bits.push(`${s.acceptedHunks} accepted`);
-      if (s.rejectedFiles.length) bits.push(`${s.rejectedFiles.length} rejected`);
+      if (s.rejectedHunks.length) bits.push(`${s.rejectedHunks.length} hunk(s) rejected`);
+      if (s.rejectedFiles.length) bits.push(`${s.rejectedFiles.length} file(s) reset`);
       if (s.deletedFiles.length) bits.push(`${s.deletedFiles.length} deleted`);
       ctx.ui.notify(
         bits.length ? `Review complete: ${bits.join(", ")}. Changes remain unstaged.` : "Review complete.",

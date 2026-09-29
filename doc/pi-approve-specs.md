@@ -7,7 +7,7 @@
 
 - **Code Change**: New, updated, deleted, or renamed code visible in `git diff` (working tree vs. index, i.e. unstaged changes). Staged changes are excluded. Includes tracked file modifications, tracked file deletions, and untracked files.
 - **Hunk**: The atomic unit of review. For tracked files, a hunk is a single contiguous diff block. For deleted tracked files, the entire deletion is one hunk. For untracked files, the entire file is one hunk.
-- **File-level Reset**: If any hunk in a tracked file is rejected, the file's working tree is reset to the index via `git checkout -- <file>`. This preserves any staged changes. This is a simplifying invariant: rejection is per-hunk visibility but per-file action. **Exception**: If a file has staged changes, the user is warned that rejection will discard those staged changes and must confirm before proceeding.
+- **Per-Hunk Revert**: Rejecting a hunk reverses *only that hunk* via a reconstructed single-hunk patch (`git apply --reject`). Other hunks in the same file remain on disk, and the index is never touched — so staged changes are preserved without any prompt. (If the patch cannot be applied cleanly, the fallback is a whole-file reset to the index.) **Reject all in file** (`d`) and `--reject-all` instead reset the file's entire working tree to the index via `git checkout -- <file>`, which likewise preserves staged changes.
 
 ## Requirements
 
@@ -42,7 +42,7 @@ Starts an interactive review of the current working-tree diff.
    - Hunk context (lines of diff)
    - Actions: **Accept**, **Accept all in file**, **Reject**, **Reject all in file**, **Revise**, **Quit**
 7. After the user makes a choice on a hunk, apply the immediate consequence and move to the next hunk.
-   - If the file was rejected (reset to index), skip any remaining hunks in that file.
+   - If the file was rejected with **Reject all in file** (reset to index), skip any remaining hunks in that file.
    - If the file was fully accepted (all hunks accepted, or via **Accept all in file**), mark remaining hunks in that file as accepted implicitly.
 
 ### `/approve <dir>`
@@ -57,7 +57,7 @@ Starts an interactive review for the repository at `<dir>`.
 Approve all pending hunks across all files in one action, skipping individual review.
 
 ### `/approve --reject-all`
-Reject all pending changes. For tracked files, `git checkout --` each modified file (reset working tree to index, preserving staged changes). For untracked files, delete them. If any affected file has staged changes, warn the user and require confirmation before discarding them.
+Reject all pending changes. For tracked files, `git checkout --` each modified file (reset working tree to index, preserving staged changes). For untracked files, delete them. No staged-changes warning is needed: resetting to the index never discards staged changes.
 
 ## Hunk Actions
 
@@ -65,12 +65,12 @@ Reject all pending changes. For tracked files, `git checkout --` each modified f
 |---|---|---|
 | **Accept** | Hunk stays on disk. | File remains modified (or stays as untracked for new files). |
 | **Accept all in file** (`f`) | All hunks in the current file (already reviewed and not yet seen) are accepted. The overlay advances to the next file. | File remains modified. |
-| **Reject** | For tracked files: the file's working tree is reset to the index via `git checkout -- <file>`, preserving staged changes. If the file has staged changes, the user is warned and must confirm. For untracked files: file is deleted from disk. | File restored to index state (or no longer exists). |
-| **Reject all in file** (`d`) | Same as **Reject** for the current file: resets working tree to index or deletes untracked file. All hunks in this file are discarded. | File restored to index state (or no longer exists). |
+| **Reject** (`r`) | For tracked files: the single hunk is reversed on disk via `git apply --reverse` of a reconstructed hunk patch; other hunks and any staged changes are untouched. If the patch fails to apply, the whole file is reset to the index and a warning is shown. For untracked files: file is deleted from disk (a single-hunk undo is impossible). | File otherwise unchanged (or no longer exists). |
+| **Reject all in file** (`d`) | The file's working tree is reset to the index (`git checkout -- <file>`) or the untracked file is deleted. All hunks in this file are discarded. Remaining hunks are skipped. | File restored to index state (or no longer exists). |
 | **Revise** | Hunk stays on disk. The user's feedback is sent as a user message to the model, triggering a new agent turn. | File remains modified. The model may change it further. |
 | **Quit** | Review ends immediately. All prior decisions (acceptances and rejections) are preserved. Unreviewed hunks remain untouched. | Working tree reflects all decisions made so far. Re-run `/approve` to review remaining hunks. |
 
-**Important**: Because rejection resets the entire file, if a user has already accepted some hunks in a file and then rejects a later hunk in the same file, the previously accepted hunks are also lost. The user must re-approve them after fixing the rejected one.
+**Important**: Rejecting a hunk (`r`) affects only that hunk — previously accepted hunks in the same file are not touched. Only **Reject all in file** (`d`) resets the whole file.
 
 ## Revise Flow
 
@@ -108,11 +108,11 @@ When all hunks have been resolved (accepted, rejected, or revised):
 |---|---|
 | Not a git repo | Error: *"Not a git repository. Approval requires a git repo."* |
 | Clean working tree | Brief notification: *"No changes to review."* |
-| Reject after accepting other hunks in same file | Entire file resets; accepted hunks are lost. |
-| File has staged changes and user rejects a hunk | Warning shown: "This file has staged (already approved) changes. Rejection will discard them. Continue?" User must confirm before `git checkout -- <file>` runs. If declined, the hunk is skipped and the file remains unchanged. |
+| Reject after accepting other hunks in same file | Only the rejected hunk is reversed; accepted hunks are kept. |
+| Single-hunk patch fails to apply (e.g. file edited mid-review) | Fallback: the file is reset to the index and a warning is shown. |
 | Revise mid-review | Review stops; model gets feedback; user re-runs `/approve` after model turn. |
 | Binary file in working tree | Shown as a single pseudo-hunk with the label `[Binary file]`. No preview is rendered. Accept/reject actions apply the same as for tracked/untracked files. Rejecting a tracked binary resets the working tree to the index; rejecting an untracked binary deletes it. |
-| Bulk `--reject-all` when tracked files have staged changes | Same warning and confirmation as per-hunk rejection: list affected files and require confirmation before running `git checkout --` (reset working tree to index, preserving staged changes). |
+| File has staged changes | Staged content is the *base* of the shown diff. Reversing a hunk only removes the unstaged delta on top of it; the index is never modified, so staged changes survive with no prompt. |
 
 ## Syntax Highlighting
 
@@ -204,4 +204,4 @@ Shiki themes carry their own color palette. The highlighted code will look like 
 - `/approve --commit` flag to auto-commit with a generated message.
 - Persistent "pending review" state across sessions.
 - Inline line-level commenting on hunks.
-- Smart patch-based hunk reversion (reset only the rejected hunk without resetting the whole file).
+- Stage individual accepted hunks (via `git apply` of accepted patches).

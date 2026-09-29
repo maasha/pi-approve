@@ -4,7 +4,7 @@ import { rm, writeFile, readFile, access } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
-import { collectChanges, resetTracked, removeUntracked } from "./git.ts";
+import { collectChanges, resetTracked, removeUntracked, rejectHunk } from "./git.ts";
 import { runReview } from "./review.ts";
 import type { GitOps } from "./review.ts";
 
@@ -25,26 +25,25 @@ afterAll(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-const gitOps = (cwd: string, confirm = async () => true): GitOps => ({
+const gitOps = (cwd: string): GitOps => ({
+  rejectHunk: (p, f, h) => rejectHunk(cwd, f, h),
   resetTracked: (p) => resetTracked(cwd, p),
   removeUntracked: (p) => removeUntracked(cwd, p),
-  confirmDiscardStaged: confirm,
 });
 
 describe("end-to-end review in a real repo", () => {
   it("accepts tracked changes (leaves them) and deletes rejected untracked files", async () => {
-    // a tracked modification + an untracked file
+    // Clean slate
+    run(["checkout", "-q", "--", "a.ts"]);
     await writeFile(join(dir, "a.ts"), "export const a = 2;\n");
     await writeFile(join(dir, "temp.txt"), "scratch\n");
 
-    const { files, stagedPaths } = await collectChanges(dir);
+    const { files } = await collectChanges(dir);
     expect(files.map((f) => f.path).sort()).toEqual(["a.ts", "temp.txt"]);
-    expect(stagedPaths.size).toBe(0);
 
     // Decide: accept a.ts, reject temp.txt
     const s = await runReview(
       files,
-      stagedPaths,
       async (f) => (f.path === "temp.txt" ? { action: "reject" } : { action: "accept" }),
       gitOps(dir),
     );
@@ -59,42 +58,81 @@ describe("end-to-end review in a real repo", () => {
     expect(s.rejectedFiles).toEqual([]);
   });
 
-  it("rejecting a tracked file resets it to the index and preserves staged changes", async () => {
-    // Clean slate for a.ts
+  it("rejecting one hunk of a multi-hunk file reverts only that hunk", async () => {
+    // Clean slate, then write a file with two far-apart unstaged changes.
     run(["checkout", "-q", "--", "a.ts"]);
-    run(["reset", "-q", "a.ts"]);
-    // Stage a change, then make a further unstaged change
-    await writeFile(join(dir, "a.ts"), "export const a = 3; // STAGED\n");
+    const lines: string[] = [];
+    for (let i = 1; i <= 30; i++) lines.push(`line${i}`);
+    await writeFile(join(dir, "a.ts"), lines.join("\n") + "\n");
+    // Commit as the new base, then make two distant edits.
     run(["add", "a.ts"]);
-    await writeFile(join(dir, "a.ts"), "export const a = 3; // STAGED\nexport const b = 4;\n");
+    run(["commit", "-q", "-m", "bump"]);
+    const base = (await readFile(join(dir, "a.ts"), "utf8")).split("\n");
+    base[4] = "line5-EDIT"; // change A
+    base[24] = "line25-EDIT"; // change B
+    await writeFile(join(dir, "a.ts"), base.join("\n") + "\n");
 
-    const { files, stagedPaths } = await collectChanges(dir);
-    expect(stagedPaths.has("a.ts")).toBe(true);
+    const { files } = await collectChanges(dir);
     const a = files.find((f) => f.path === "a.ts")!;
-    // The unstaged diff is only the `b` line
-    expect(a.hunks[0]!.lines.join("\n")).toContain("b = 4");
+    expect(a.hunks.length).toBe(2); // two separate hunks
 
-    // Reject a.ts (confirm staged discard)
-    let confirmed = false;
+    // Accept hunk 1, reject hunk 2.
     const s = await runReview(
       files,
-      stagedPaths,
-      async () => ({ action: "reject" }),
-      {
-        ...gitOps(dir),
-        confirmDiscardStaged: async () => {
-          confirmed = true;
-          return true;
-        },
-      },
+      async (_f, h) => (h === a.hunks[1] ? { action: "reject" } : { action: "accept" }),
+      gitOps(dir),
     );
 
-    expect(confirmed).toBe(true);
-    // Working tree reset to index (staged content), the unstaged `b` line is gone
-    const content = await readFile(join(dir, "a.ts"), "utf8");
-    expect(content).toBe("export const a = 3; // STAGED\n");
+    const after = (await readFile(join(dir, "a.ts"), "utf8")).split("\n");
+    expect(after[4]).toBe("line5-EDIT"); // accepted hunk survives
+    expect(after[24]).toBe("line25"); // rejected hunk reverted
+    expect(s.rejectedHunks).toHaveLength(1);
+    expect(s.rejectedFiles).toEqual([]);
+    expect(s.acceptedHunks).toBe(1);
+
+    // cleanup: restore base for the next test
+    run(["checkout", "-q", "--", "a.ts"]);
+  });
+
+  it("rejecting a hunk preserves staged changes without confirmation", async () => {
+    run(["checkout", "-q", "--", "a.ts"]);
+    run(["reset", "-q", "a.ts"]);
+    // Commit a 30-line base (unique to this test), stage an edit to line 5,
+    // then an unstaged edit to line 30.
+    const lines: string[] = [];
+    for (let i = 1; i <= 30; i++) lines.push(`t3-line${i}`);
+    await writeFile(join(dir, "a.ts"), lines.join("\n") + "\n");
+    run(["add", "a.ts"]);
+    run(["commit", "-q", "-m", "base30"]);
+    let c = (await readFile(join(dir, "a.ts"), "utf8")).split("\n");
+    c[4] = "t3-line5-STAGED";
+    await writeFile(join(dir, "a.ts"), c.join("\n") + "\n");
+    run(["add", "a.ts"]); // staged
+    c = (await readFile(join(dir, "a.ts"), "utf8")).split("\n");
+    c[29] = "t3-line30-UNSTAGED";
+    await writeFile(join(dir, "a.ts"), c.join("\n") + "\n"); // unstaged, far from the staged line
+
+    const { files } = await collectChanges(dir);
+    const a = files.find((f) => f.path === "a.ts")!;
+    expect(a.hunks.length).toBe(1);
+
+    const s = await runReview(
+      files,
+      async () => ({ action: "reject" }),
+      gitOps(dir),
+    );
+
+    // Unstaged edit reverted; staged edit stays in both index and work tree.
+    const after = (await readFile(join(dir, "a.ts"), "utf8")).split("\n");
+    expect(after[4]).toBe("t3-line5-STAGED");
+    expect(after[29]).toBe("t3-line30");
     // Staged change still in index
-    expect(execFileSync("git", ["diff", "--cached", "--name-only"], { cwd: dir, encoding: "utf8" }).includes("a.ts")).toBe(true);
-    expect(s.rejectedFiles).toEqual(["a.ts"]);
+    const cached = execFileSync("git", ["diff", "--cached", "--name-only"], { cwd: dir, encoding: "utf8" });
+    expect(cached).toContain("a.ts");
+    expect(s.rejectedHunks).toHaveLength(1);
+
+    // cleanup: drop staged + work tree, restore base
+    run(["reset", "-q", "a.ts"]);
+    run(["checkout", "-q", "--", "a.ts"]);
   });
 });

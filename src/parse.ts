@@ -119,6 +119,7 @@ function extractNewPath(diffGitLine: string): string | null {
 }
 
 interface HunkCounts {
+  oldStart: number;
   oldCount: number;
   newCount: number;
   newStart: number;
@@ -128,9 +129,10 @@ function parseHunkHeader(header: string): HunkCounts | null {
   const m = header.match(/@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
   if (!m) return null;
   return {
+    oldStart: parseInt(m[1]!, 10),
     oldCount: m[2] === undefined ? 1 : parseInt(m[2], 10),
     newCount: m[4] === undefined ? 1 : parseInt(m[4], 10),
-    newStart: parseInt(m[3], 10),
+    newStart: parseInt(m[3]!, 10),
   };
 }
 
@@ -167,8 +169,8 @@ export function parseDiff(diff: string): FileChange[] {
       // git emits "Binary files a/x and b/x differ" — synthesize a binary hunk.
       current.kind = "binary";
       if (!current.hunks.length) {
-        currentHunk = { header: "[Binary file]", lines: ["[Binary file]"], newStart: 0, binary: true };
-        current.hunks.push(currentHunk);
+        const binHunk: Hunk = { header: "[Binary file]", lines: ["[Binary file]"], newStart: 0, oldStart: 0, oldCount: 0, newCount: 0, binary: true };
+        current.hunks.push(binHunk);
       }
       expectedBody = 0;
       continue;
@@ -193,7 +195,10 @@ export function parseDiff(diff: string): FileChange[] {
     if (line.startsWith("+++ ")) {
       const path = line.slice(4);
       if (path === "/dev/null" || cleanPath(path) === "/dev/null") {
-        if (current) current.kind = "deleted";
+        if (current) {
+          current.kind = "deleted";
+          current.deleted = true;
+        }
         continue;
       }
       const clean = cleanPath(path);
@@ -209,7 +214,14 @@ export function parseDiff(diff: string): FileChange[] {
     if (line.startsWith("@@")) {
       if (!current) continue;
       const meta = parseHunkHeader(line);
-      const hunk: Hunk = { header: line, lines: [], newStart: meta ? meta.newStart : 0 };
+      const hunk: Hunk = {
+        header: line,
+        lines: [],
+        newStart: meta ? meta.newStart : 0,
+        oldStart: meta ? meta.oldStart : 0,
+        oldCount: meta ? meta.oldCount : 0,
+        newCount: meta ? meta.newCount : 0,
+      };
       currentHunk = hunk;
       current.hunks.push(hunk);
       expectedBody = meta ? meta.oldCount + meta.newCount : 0;
@@ -241,10 +253,11 @@ export function untrackedFileChange(path: string, content: string, binary: boole
       untracked: true,
       kind: "added",
       language: detectLanguage(path),
-      hunks: [{ header: "[Binary file]", lines: ["[Binary file]"], newStart: 1, binary: true }],
+      hunks: [{ header: "[Binary file]", lines: ["[Binary file]"], newStart: 1, oldStart: 0, oldCount: 0, newCount: 1, binary: true }],
     };
   }
   const text = content.endsWith("\n") ? content.slice(0, -1) : content;
+  const fileLines = text.split("\n");
   return {
     path,
     untracked: true,
@@ -253,8 +266,11 @@ export function untrackedFileChange(path: string, content: string, binary: boole
     hunks: [
       {
         header: null,
-        lines: text.split("\n").map((l) => `+${l}`),
+        lines: fileLines.map((l) => `+${l}`),
         newStart: 1,
+        oldStart: 0,
+        oldCount: 0,
+        newCount: fileLines.length,
       },
     ],
   };
