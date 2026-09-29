@@ -93,7 +93,14 @@ export class ReviewComponent implements Component, Focusable {
   }
 
   private async start(): Promise<void> {
-    const summary = await runReview(this.files, this.stagedPaths, this.decide, this.git);
+    // Bind explicitly: passing a bare method reference (`this.decide`) would
+    // detach `this` in strict-mode ESM and crash when the engine invokes it.
+    const summary = await runReview(
+      this.files,
+      this.stagedPaths,
+      this.decide.bind(this),
+      { ...this.git, confirmDiscardStaged: this.confirmDiscardStaged.bind(this) },
+    );
     let revisedMessage: string | null = null;
     if (summary.revised) {
       const { file, hunk, feedback } = summary.revised;
