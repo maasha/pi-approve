@@ -16,22 +16,26 @@ After the agent edits your files, run `/approve` to walk through each diff hunk 
 
 ## Installation
 
-1. **Install dependencies** (Shiki for syntax highlighting):
+1. **Clone the repository**:
    ```bash
+   git clone https://github.com/maasha/pi-approve.git
    cd pi-approve
+   ```
+
+2. **Install dependencies**:
+   ```bash
    npm install
    ```
 
-2. **Load the extension** in Pi:
+3. **Load the extension** in Pi:
    ```bash
-   pi --extension ./pi-approve/src/index.ts
+   pi --extension ./src/index.ts
    ```
 
    Or copy the directory into Pi's extensions path so it loads automatically:
    ```bash
-   # macOS / Linux
    mkdir -p ~/.pi/agent/extensions
-   cp -r pi-approve ~/.pi/agent/extensions/
+   cp -r . ~/.pi/agent/extensions/pi-approve
    ```
 
 ## Usage
@@ -41,8 +45,11 @@ After the agent edits your files, run `/approve` to walk through each diff hunk 
 | Command | Action |
 |---|---|
 | `/approve` | Start an interactive review of all working-tree changes |
+| `/approve <dir>` | Start an interactive review for the repo at `<dir>` |
 | `/approve --all` | Approve all changes without reviewing |
+| `/approve <dir> --all` | Approve all changes in `<dir>` without reviewing |
 | `/approve --reject-all` | Reject all changes (checkout tracked files, delete untracked files) |
+| `/approve <dir> --reject-all` | Reject all changes in `<dir>` |
 
 ### Interactive review
 

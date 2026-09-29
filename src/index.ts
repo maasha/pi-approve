@@ -3,6 +3,7 @@
 // Usage:   pi --extension ./pi-approve/src/index.ts
 // Command: /approve
 
+import { parseArgs } from "./args";
 import type {
 	ExtensionAPI,
 	ExtensionCommandContext,
@@ -213,10 +214,10 @@ function flushHunk(hunks: Hunk[], hunk: Hunk | null) {
    Untracked file → pseudo-hunk
    ────────────────────────────────────────────────────────── */
 
-function untrackedToHunk(filePath: string): Hunk {
+function untrackedToHunk(filePath: string, baseDir: string = process.cwd()): Hunk {
 	let lines: DiffLine[] = [];
 	try {
-		const content = readFileSync(resolve(process.cwd(), filePath), "utf-8");
+		const content = readFileSync(resolve(baseDir, filePath), "utf-8");
 		const raw = content.split("\n").slice(0, MAX_DIFF_LINES);
 		lines = raw.map((l) => ({ type: "add" as const, content: l }));
 		if (content.split("\n").length > MAX_DIFF_LINES) {
@@ -479,9 +480,14 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("approve", {
 		description: "Review and approve working tree changes before staging",
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
+			// ── 0. Parse arguments ──────────────────────────
+			const { all, rejectAll, srcDir } = parseArgs(args);
+			const baseDir = srcDir || process.cwd();
+			const execOpts = srcDir ? { cwd: srcDir } : undefined;
+
 			// ── 1. Git repo check ───────────────────────────
-			const gitDir = await pi.exec("git", ["rev-parse", "--git-dir"]);
-			if (gitDir.exitCode !== 0) {
+			const gitDir = await pi.exec("git", ["rev-parse", "--git-dir"], execOpts);
+			if (gitDir.code !== 0) {
 				ctx.ui.notify(
 					"Not a git repository. /approve requires a git repo.",
 					"error",
@@ -490,18 +496,18 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			// ── 2. Gather diff + untracked ──────────────────
-			const diffOut = await pi.exec("git", ["diff"]);
+			const diffOut = await pi.exec("git", ["diff"], execOpts);
 			const untrackedOut = await pi.exec("git", [
 				"ls-files",
 				"--others",
 				"--exclude-standard",
-			]);
+			], execOpts);
 
 			const trackedHunks = parseDiff(diffOut.stdout);
 			const untrackedPaths = untrackedOut.stdout
 				.split("\n")
 				.filter(Boolean);
-			const untrackedHunks = untrackedPaths.map(untrackedToHunk);
+			const untrackedHunks = untrackedPaths.map((p) => untrackedToHunk(p, baseDir));
 
 			const allHunks = [...trackedHunks, ...untrackedHunks];
 
@@ -511,9 +517,7 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			// ── 3. Flags ────────────────────────────────────
-			const arg = args.trim();
-
-			if (arg === "--all") {
+			if (all) {
 				ctx.ui.notify(
 					`Approved all ${allHunks.length} change(s). Leave unstaged for manual git add.`,
 					"success",
@@ -521,16 +525,16 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			if (arg === "--reject-all") {
+			if (rejectAll) {
 				const trackedFiles = [
 					...new Set(trackedHunks.map((h) => h.filePath)),
 				];
 				for (const f of trackedFiles) {
-					await pi.exec("git", ["checkout", "--", f]);
+					await pi.exec("git", ["checkout", "--", f], execOpts);
 				}
 				for (const f of untrackedPaths) {
 					try {
-						unlinkSync(resolve(process.cwd(), f));
+						unlinkSync(resolve(baseDir, f));
 					} catch {
 						/* best effort */
 					}
@@ -558,12 +562,12 @@ export default function (pi: ExtensionAPI) {
 					case "reject": {
 						if (hunk.isUntracked) {
 							try {
-								unlinkSync(resolve(process.cwd(), hunk.filePath));
+								unlinkSync(resolve(baseDir, hunk.filePath));
 							} catch {
 								/* ignore */
 							}
 						} else {
-							await pi.exec("git", ["checkout", "--", hunk.filePath]);
+							await pi.exec("git", ["checkout", "--", hunk.filePath], execOpts);
 						}
 						queue = queue.filter((h) => h.filePath !== hunk.filePath);
 						break;
@@ -576,12 +580,12 @@ export default function (pi: ExtensionAPI) {
 					case "reject_all_file": {
 						if (hunk.isUntracked) {
 							try {
-								unlinkSync(resolve(process.cwd(), hunk.filePath));
+								unlinkSync(resolve(baseDir, hunk.filePath));
 							} catch {
 								/* ignore */
 							}
 						} else {
-							await pi.exec("git", ["checkout", "--", hunk.filePath]);
+							await pi.exec("git", ["checkout", "--", hunk.filePath], execOpts);
 						}
 						queue = queue.filter((h) => h.filePath !== hunk.filePath);
 						break;
