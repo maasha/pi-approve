@@ -92,7 +92,7 @@ export default function piApprove(pi: ExtensionAPI) {
             git,
             getDefaultHighlighter(),
           ),
-        { overlay: true, overlayOptions: { width: "100%" } },
+        { overlay: true, overlayOptions: { width: "100%", anchor: "top" } },
       );
 
       if (!result) return;
