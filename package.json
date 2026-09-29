@@ -4,6 +4,10 @@
   "description": "Pi extension that requires explicit user approval of every code change before it can be staged for commit.",
   "type": "module",
   "main": "src/index.ts",
+  "keywords": ["pi-package"],
+  "pi": {
+    "extensions": ["./src/index.ts"]
+  },
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
