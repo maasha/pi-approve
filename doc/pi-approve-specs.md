@@ -188,13 +188,19 @@ unstaged hunks.
 4. The review does not continue, even if other hunks were still open. **The diff view is
    the validation**: if the agent reverted too much or too little, the next `/approve`
    pass shows it, and the user can push back in chat.
+5. When the agent run settles, a confirm gate offers to re-open the review at the rejected
+   hunk (see *Auto-reopen*), so the loop closes without a manual re-run.
 
 ### Auto-reopen
 
 A reject (or revise) never leaves the user with a manual re-entry step: when the agent run
-triggered by the message has **fully settled**, the review **re-opens automatically** on the
-fresh diff, resuming at the hunk that was rejected (or revised).
+triggered by the message has **fully settled**, the extension offers to **re-open the review**
+at the fresh diff, resuming at the hunk that was rejected (or revised).
 
+- The agent's response is still visible in the chat when the run settles, so reopening is
+  gated behind a **confirm dialog**: *"Agent finished. Return to the review?"* — the user
+  reads the response first and re-enters on purpose. Declining stops the loop; `/approve`
+  works whenever.
 - The re-opened review collects the working tree again and builds a fresh hunk list — the
   agent's edits are what the user validates.
 - **Resume location**: the cursor starts on the best match of the reviewed hunk in the
@@ -204,7 +210,8 @@ fresh diff, resuming at the hunk that was rejected (or revised).
 - If the fresh diff is empty (the agent fully complied and nothing else is pending), the
   reopen shows a brief *"No changes to review."* notification and stops.
 - The loop can repeat: the reopened review can itself end in another reject/revise, which
-  re-arms it. Quitting (`q`/`Esc`) or a normal auto-close does not re-arm it.
+  re-arms it. Quitting (`q`/`Esc`), declining the confirm gate, or a normal auto-close does
+  not re-arm it.
 - Only one reopen is pending at a time; an extra `agent_settled` (e.g. a queued
   continuation) finds no pending reopen and does nothing.
 
@@ -237,7 +244,7 @@ When all hunks have been resolved (accepted, rejected, revised, or agent-revert-
 - All accepted changes remain in the working tree, **unstaged**.
 - The user handles `git add` and `git commit` manually.
 - Accepted but unstaged changes will reappear on subsequent `/approve` runs until they are staged or committed — by design, the review is a gate to run right before committing, and a re-confirm of an already-accepted hunk is a single keypress.
-- If any hunks were revised or rejected (agent revert), the review re-opens automatically when the agent settles, at the hunk that was revised or rejected (see *Auto-reopen*).
+- If any hunks were revised or rejected (agent revert), the user is offered to re-open the review when the agent settles (see *Auto-reopen*), resuming at the hunk that was revised or rejected.
 
 ## Edge Cases
 
@@ -250,6 +257,7 @@ When all hunks have been resolved (accepted, rejected, revised, or agent-revert-
 | Agent reverts too much / too little | Visible in the auto-reopened review at the rejected hunk; the user pushes back in chat. Nothing is lost — the index is never modified. |
 | Auto-reopen fires but the diff is clean | Brief *"No changes to review."* notification; the loop stops. |
 | Extra `agent_settled` (queued continuation, etc.) | Only one reopen is pending at a time; the extra event is a no-op. |
+| User declines the reopen confirm | The loop stops; the agent's messages remain visible; `/approve` re-opens the review manually. |
 | Revise mid-review | Review stops; model gets feedback; the review re-opens automatically at the same hunk when the agent settles. |
 | Binary file in working tree | Shown as a single pseudo-hunk with the label `[Binary file]`. No preview is rendered. Accept/reject actions apply the same as for tracked/untracked files. Rejecting a tracked binary resets the working tree to the index; rejecting an untracked binary deletes it. |
 | File has staged changes | Staged content is the *base* of the shown diff. Reversing a hunk only removes the unstaged delta on top of it; the index is never modified, so staged changes survive with no prompt. |

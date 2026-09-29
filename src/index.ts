@@ -134,13 +134,20 @@ export default function piApprove(pi: ExtensionAPI) {
 
   // ---- Auto-reopen after an agent-revert / revise turn -----------------------
   // When a review ended by delegating work to the agent (per-hunk reject or
-  // revise), the review re-opens as soon as that agent run fully settles,
-  // resuming at the hunk that was rejected/revised.
+  // revise), the agent's response is still visible in the chat when the run
+  // settles, so the user reads it first. A confirm gate waits for the user,
+  // then re-opens the review at the hunk that caused the pass. One slot only
+  // — an extra settle finds it already consumed and does nothing.
   pi.on("agent_settled", async (event, ctx) => {
     if (!pendingReapprove || ctx.mode !== "tui") return;
     const { dir, resume } = pendingReapprove;
     pendingReapprove = null;
     if (!ctx.isIdle()) return;
+    const proceed = await ctx.ui.confirm(
+      "Approve review",
+      "Agent finished. Return to the review?",
+    );
+    if (!proceed) return; // user stays in chat; /approve works whenever
     await runReviewSession(ctx, dir, resume);
   });
 }
