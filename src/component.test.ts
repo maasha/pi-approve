@@ -116,9 +116,9 @@ describe("ReviewComponent callback `this` binding (regression)", () => {
       captured.git = args[2] as GitOps;
       return {
         rejectedFiles: [],
-        rejectedHunks: [],
         deletedFiles: [],
         acceptedHunks: 0,
+        requestedReverts: [],
         skippedHunks: 0,
         quit: false,
         revised: null,
@@ -148,7 +148,6 @@ describe("ReviewComponent callback `this` binding (regression)", () => {
       () => {}, // finish
       [file], // files
       {
-        rejectHunk: async () => true,
         resetTracked: async () => {},
         removeUntracked: async () => {},
       }, // git

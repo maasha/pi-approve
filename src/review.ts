@@ -2,8 +2,6 @@ import type { FileChange, Hunk, HunkActionDecision } from "./types.ts";
 
 /** Injectable git operations so the review engine is unit-testable. */
 export interface GitOps {
-  /** Reject one hunk by reverse-applying it (`git apply --reverse`). True on success. */
-  rejectHunk(path: string, file: FileChange, hunk: Hunk): Promise<boolean>;
   /** Reset a tracked file's working tree to the index (`git checkout -- <file>`). */
   resetTracked(path: string): Promise<void>;
   /** Delete an untracked file from disk (`rm`). */
@@ -33,12 +31,12 @@ export interface HunkView {
 export interface ReviewSummary {
   /** Files whose working tree was fully reset (reject-all-in-file) — i.e. rejected. */
   rejectedFiles: string[];
-  /** Individual hunks reverted in place. */
-  rejectedHunks: string[];
   /** Untracked files deleted. */
   deletedFiles: string[];
   /** Total hunks accepted (including implicit accept-all-in-file). */
   acceptedHunks: number;
+  /** Hunks the agent was asked to revert (delegated, not applied locally). */
+  requestedReverts: { file: string; hunk: Hunk }[];
   /** Hunks left undecided when the user quit. */
   skippedHunks: number;
   quit: boolean;
@@ -61,7 +59,11 @@ interface Entry {
  * anything, while `a`/`A`/`r`/`R` decide hunks and then the cursor
  * auto-advances to the next open hunk (wrapping). The review auto-closes when
  * every hunk is decided; `quit` ends it early, counting open hunks as
- * skipped. `revise` ends it with the feedback.
+ * skipped. `revise` ends it with the feedback. Rejecting a hunk of an
+ * ordinary tracked file is *delegated* to the agent: it records the request
+ * and ends the review, so the user can re-run `/approve` to validate. Git
+ * mutations happen only for untracked files, deleted/binary files, and
+ * whole-file rejects.
  *
  * `git` is injectable for testing.
  */
@@ -72,9 +74,9 @@ export async function runReview(
 ): Promise<ReviewSummary> {
   const summary: ReviewSummary = {
     rejectedFiles: [],
-    rejectedHunks: [],
     deletedFiles: [],
     acceptedHunks: 0,
+    requestedReverts: [],
     skippedHunks: 0,
     quit: false,
     revised: null,
@@ -189,22 +191,16 @@ export async function runReview(
           summary.deletedFiles.push(file.path);
           closeFile(file.path, "rejected");
         } else if (file.deleted || hunk.binary) {
-          // A hunk inside a deleted/binary file can't be applied in place —
+          // A hunk inside a deleted/binary file can't be reverted in place —
           // reverting it means restoring the whole file.
           await git.resetTracked(file.path);
           summary.rejectedFiles.push(file.path);
           closeFile(file.path, "rejected");
         } else {
-          const ok = await git.rejectHunk(file.path, file, hunk);
-          if (ok) {
-            status[cur] = "rejected";
-            summary.rejectedHunks.push(`${file.path}:${hunk.header ?? "?"}`);
-          } else {
-            // Fallback: the single-hunk patch didn't apply cleanly.
-            await git.resetTracked(file.path);
-            summary.rejectedFiles.push(file.path);
-            closeFile(file.path, "rejected");
-          }
+          // Ordinary tracked file: delegate the revert to the agent (the
+          // review ends right after this decision).
+          status[cur] = "rejected";
+          summary.requestedReverts.push({ file: file.path, hunk });
         }
         break;
       case "reject-all-in-file":
@@ -247,6 +243,13 @@ export async function runReview(
     if (status[cur] !== "open") continue;
 
     await applyDecision(cur, d);
+
+    // A delegated agent-revert ends the review right away: the user re-runs
+    // /approve after the model turn to validate the result.
+    if (d.action === "reject" && summary.requestedReverts.length > 0) {
+      summary.skippedHunks = countSkipped();
+      return summary;
+    }
 
     if (allDecided()) return summary; // auto-close
 

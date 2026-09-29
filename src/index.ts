@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { resolve } from "node:path";
 import { parseArgs } from "./args.ts";
-import { collectChanges, isGitRepo, resetTracked, removeUntracked, rejectHunk } from "./git.ts";
+import { collectChanges, isGitRepo, resetTracked, removeUntracked } from "./git.ts";
 import type { GitOps } from "./review.ts";
 import { ReviewComponent, type ReviewResult } from "./component.ts";
 import { getDefaultHighlighter } from "./highlight.ts";
@@ -33,7 +33,6 @@ export default function piApprove(pi: ExtensionAPI) {
       }
 
       const git: GitOps = {
-        rejectHunk: (p, f, h) => rejectHunk(dir, f, h),
         resetTracked: (p) => resetTracked(dir, p),
         removeUntracked: (p) => removeUntracked(dir, p),
       };
@@ -97,18 +96,21 @@ export default function piApprove(pi: ExtensionAPI) {
 
       if (!result) return;
 
-      // The overlay already applied git mutations for accept/reject.
-      // If the user chose to revise, hand feedback to the model.
+      // The overlay already applied instant git mutations (untracked deletes,
+      // whole-file resets). A revise or a per-hunk reject hands feedback to
+      // the model; the review has ended either way.
       if (result.revisedMessage) {
-        // Send via the model on the next turn; the review has ended.
         await pi.sendUserMessage(result.revisedMessage);
+        return;
+      }
+      if (result.revertMessages) {
+        await pi.sendUserMessage(result.revertMessages.join("\n\n"));
         return;
       }
 
       const s = result.summary;
       const bits: string[] = [];
       if (s.acceptedHunks) bits.push(`${s.acceptedHunks} accepted`);
-      if (s.rejectedHunks.length) bits.push(`${s.rejectedHunks.length} hunk(s) rejected`);
       if (s.rejectedFiles.length) bits.push(`${s.rejectedFiles.length} file(s) reset`);
       if (s.deletedFiles.length) bits.push(`${s.deletedFiles.length} deleted`);
       if (s.skippedHunks) bits.push(`${s.skippedHunks} skipped`);

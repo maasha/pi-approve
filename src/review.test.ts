@@ -25,7 +25,6 @@ function file(path: string, overrides: Partial<FileChange> = {}): FileChange {
 }
 
 const git = () => ({
-  rejectHunk: vi.fn(async () => true),
   resetTracked: vi.fn(async () => {}),
   removeUntracked: vi.fn(async () => {}),
 });
@@ -41,12 +40,11 @@ describe("runReview — decisions", () => {
     );
     expect(s.acceptedHunks).toBe(2);
     expect(s.rejectedFiles).toEqual([]);
-    expect(s.rejectedHunks).toEqual([]);
-    expect(g.rejectHunk).not.toHaveBeenCalled();
+    expect(s.requestedReverts).toEqual([]);
     expect(g.resetTracked).not.toHaveBeenCalled();
   });
 
-  it("rejecting one hunk of a multi-hunk file reverts only that hunk", async () => {
+  it("rejecting one hunk of a multi-hunk file delegates to the agent and ends the review", async () => {
     const g = git();
     const seen: HunkStatus[] = [];
     const f = file("a.ts");
@@ -60,11 +58,14 @@ describe("runReview — decisions", () => {
       },
       g as unknown as GitOps,
     );
-    expect(g.rejectHunk).toHaveBeenCalledTimes(1);
-    expect(g.rejectHunk).toHaveBeenCalledWith("a.ts", f, f.hunks[1]);
-    expect(s.rejectedHunks).toHaveLength(1);
+    // No local git mutation for a hunk of an ordinary tracked file.
+    expect(g.resetTracked).not.toHaveBeenCalled();
+    expect(s.requestedReverts).toEqual([{ file: "a.ts", hunk: f.hunks[1] }]);
     expect(s.acceptedHunks).toBe(1);
-    expect(seen).toEqual(["open", "open"]); // both hunks were open when visited
+    // The review ends on the reject: only two views were presented, the
+    // remaining open hunk is counted as skipped.
+    expect(seen).toEqual(["open", "open"]);
+    expect(s.skippedHunks).toBe(0);
   });
 
   it("A accepts every undecided hunk in the file and moves on", async () => {
@@ -94,25 +95,38 @@ describe("runReview — decisions", () => {
     const f = file("del.ts", { deleted: true, kind: "deleted", hunks: [hunk(["-a"], 1)] });
     const s = await runReview([f], async () => ({ action: "reject" }) as HunkActionDecision, g as unknown as GitOps);
     expect(g.resetTracked).toHaveBeenCalledWith("del.ts");
-    expect(g.rejectHunk).not.toHaveBeenCalled();
     expect(s.rejectedFiles).toEqual(["del.ts"]);
+    expect(s.requestedReverts).toEqual([]);
   });
 
-  it("falls back to whole-file reset when the hunk patch fails", async () => {
-    const g = { ...git(), rejectHunk: vi.fn(async () => false) };
+  it("rejecting a hunk in a binary file resets the whole file", async () => {
+    const g = git();
+    const f = file("bin.dat", { kind: "binary", hunks: [{ header: null, lines: [], newStart: 0, oldStart: 0, oldCount: 0, newCount: 0, binary: true }] });
+    const s = await runReview([f], async () => ({ action: "reject" }) as HunkActionDecision, g as unknown as GitOps);
+    expect(g.resetTracked).toHaveBeenCalledWith("bin.dat");
+    expect(s.requestedReverts).toEqual([]);
+  });
+
+  it("reject on a multi-file review ends the review and counts later hunks as skipped", async () => {
+    const g = git();
+    const visits: string[] = [];
     const s = await runReview(
       [file("a.ts"), file("b.ts")],
-      async (v) =>
-        v.file.path === "a.ts"
+      async (v) => {
+        visits.push(v.file.path);
+        return v.file.path === "a.ts"
           ? ({ action: "reject" } as HunkActionDecision)
-          : ({ action: "accept" } as HunkActionDecision),
+          : ({ action: "accept" } as HunkActionDecision);
+      },
       g as unknown as GitOps,
     );
-    expect(g.resetTracked).toHaveBeenCalledWith("a.ts");
-    expect(s.rejectedFiles).toEqual(["a.ts"]);
-    // b.ts still reviewed after the fallback
-    expect(s.acceptedHunks).toBe(2);
+    // a.ts hunk 0 -> reject ends the review; b.ts never presented.
+    expect(visits).toEqual(["a.ts"]);
+    expect(s.requestedReverts).toHaveLength(1);
+    expect(s.skippedHunks).toBe(3); // a.ts:1 + b.ts:0 + b.ts:1
+    expect(s.acceptedHunks).toBe(0);
   });
+
 
   it("R resets a tracked file and rejects all its hunks", async () => {
     const g = git();
@@ -304,10 +318,9 @@ describe("runReview — navigation", () => {
       },
       g as unknown as GitOps,
     );
-    expect(g.rejectHunk).not.toHaveBeenCalled();
     expect(g.resetTracked).not.toHaveBeenCalled();
     expect(s.acceptedHunks).toBe(1);
-    expect(s.rejectedHunks).toEqual([]);
+    expect(s.requestedReverts).toEqual([]);
     expect(s.skippedHunks).toBe(1);
   });
 });

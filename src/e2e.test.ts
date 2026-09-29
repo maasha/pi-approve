@@ -4,7 +4,7 @@ import { rm, writeFile, readFile, access } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
-import { collectChanges, resetTracked, removeUntracked, rejectHunk } from "./git.ts";
+import { collectChanges, resetTracked, removeUntracked } from "./git.ts";
 import { runReview } from "./review.ts";
 import type { GitOps } from "./review.ts";
 
@@ -26,7 +26,6 @@ afterAll(async () => {
 });
 
 const gitOps = (cwd: string): GitOps => ({
-  rejectHunk: (p, f, h) => rejectHunk(cwd, f, h),
   resetTracked: (p) => resetTracked(cwd, p),
   removeUntracked: (p) => removeUntracked(cwd, p),
 });
@@ -41,7 +40,7 @@ describe("end-to-end review in a real repo", () => {
     const { files } = await collectChanges(dir);
     expect(files.map((f) => f.path).sort()).toEqual(["a.ts", "temp.txt"]);
 
-    // Decide: accept a.ts, reject temp.txt
+    // Decide: accept a.ts, reject temp.txt (untracked -> deleted locally)
     const s = await runReview(
       files,
       async (v) => (v.file.path === "temp.txt" ? { action: "reject" } : { action: "accept" }),
@@ -56,25 +55,24 @@ describe("end-to-end review in a real repo", () => {
     expect(s.acceptedHunks).toBe(1);
     expect(s.deletedFiles).toEqual(["temp.txt"]);
     expect(s.rejectedFiles).toEqual([]);
+    expect(s.requestedReverts).toEqual([]);
   });
 
-  it("rejecting one hunk of a multi-hunk file reverts only that hunk", async () => {
-    // Clean slate, then write a file with two far-apart unstaged changes.
+  it("rejecting a hunk of an ordinary tracked file delegates to the agent (no local mutation)", async () => {
     run(["checkout", "-q", "--", "a.ts"]);
     const lines: string[] = [];
     for (let i = 1; i <= 30; i++) lines.push(`line${i}`);
     await writeFile(join(dir, "a.ts"), lines.join("\n") + "\n");
-    // Commit as the new base, then make two distant edits.
     run(["add", "a.ts"]);
-    run(["commit", "-q", "-m", "bump"]);
+    run(["commit", "-q", "-m", "delegbase"]);
     const base = (await readFile(join(dir, "a.ts"), "utf8")).split("\n");
-    base[4] = "line5-EDIT"; // change A
-    base[24] = "line25-EDIT"; // change B
+    base[4] = "line5-EDIT";
+    base[24] = "line25-EDIT";
     await writeFile(join(dir, "a.ts"), base.join("\n") + "\n");
 
     const { files } = await collectChanges(dir);
     const a = files.find((f) => f.path === "a.ts")!;
-    expect(a.hunks.length).toBe(2); // two separate hunks
+    expect(a.hunks.length).toBe(2);
 
     // Accept hunk 1, reject hunk 2.
     const s = await runReview(
@@ -83,11 +81,22 @@ describe("end-to-end review in a real repo", () => {
       gitOps(dir),
     );
 
+    // Nothing was reverted locally: both edits are still on disk, waiting
+    // for the agent to act on the request.
     const after = (await readFile(join(dir, "a.ts"), "utf8")).split("\n");
-    expect(after[24]).toBe("line25"); // rejected hunk reverted
-    expect(s.rejectedHunks).toHaveLength(1);
+    expect(after[4]).toBe("line5-EDIT");
+    expect(after[24]).toBe("line25-EDIT");
+    expect(s.requestedReverts).toHaveLength(1);
+    expect(s.requestedReverts[0]).toEqual({ file: "a.ts", hunk: a.hunks[1] });
     expect(s.rejectedFiles).toEqual([]);
     expect(s.acceptedHunks).toBe(1);
+    expect(s.skippedHunks).toBe(0);
+
+    // The generated message names the file and embeds the hunk diff.
+    const { buildRevertMessage } = await import("./revise.ts");
+    const msg = buildRevertMessage("a.ts", a.hunks[1]!);
+    expect(msg).toContain("a.ts");
+    expect(msg).toContain("+line25-EDIT");
 
     // cleanup: restore base for the next test
     run(["checkout", "-q", "--", "a.ts"]);
@@ -111,9 +120,10 @@ describe("end-to-end review in a real repo", () => {
 
     // 1: start at hunk 0, ↑ clamps; 2: still hunk 0, ↓ moves to hunk 1;
     // 3: back ↑ to hunk 0 (still open); 4: accept hunk 0;
-    // 5: auto-advance hunk 1, ↓ clamps; 6: reject hunk 1.
+    // 5: auto-advance hunk 1, ↓ clamps; 6: reject hunk 1 (delegated: review ends).
+    let s!: Awaited<ReturnType<typeof runReview>>;
     let step = 0;
-    await runReview(
+    s = await runReview(
       files,
       async (v) => {
         expect(v.file.path).toBe("a.ts");
@@ -132,15 +142,19 @@ describe("end-to-end review in a real repo", () => {
       gitOps(dir),
     );
 
+    // The accept stays on disk; the reject is delegated to the agent, so
+    // nothing has been reverted locally yet.
+    expect(s.acceptedHunks).toBe(1);
+    expect(s.requestedReverts).toHaveLength(1);
     const after = (await readFile(join(dir, "a.ts"), "utf8")).split("\n");
     expect(after[4]).toBe("nav5-EDIT"); // accepted hunk stays
-    expect(after[24]).toBe("nav25"); // rejected hunk reverted
+    expect(after[24]).toBe("nav25-EDIT"); // reject delegated, file untouched
 
     // cleanup
     run(["checkout", "-q", "--", "a.ts"]);
   });
 
-  it("rejecting a hunk preserves staged changes without confirmation", async () => {
+  it("rejecting a file (R) preserves staged changes without confirmation", async () => {
     run(["checkout", "-q", "--", "a.ts"]);
     run(["reset", "-q", "a.ts"]);
     // Commit a 30-line base (unique to this test), stage an edit to line 5,
@@ -164,7 +178,7 @@ describe("end-to-end review in a real repo", () => {
 
     const s = await runReview(
       files,
-      async () => ({ action: "reject" }),
+      async () => ({ action: "reject-all-in-file" }),
       gitOps(dir),
     );
 
@@ -175,7 +189,7 @@ describe("end-to-end review in a real repo", () => {
     // Staged change still in index
     const cached = execFileSync("git", ["diff", "--cached", "--name-only"], { cwd: dir, encoding: "utf8" });
     expect(cached).toContain("a.ts");
-    expect(s.rejectedHunks).toHaveLength(1);
+    expect(s.rejectedFiles).toEqual(["a.ts"]);
 
     // cleanup: drop staged + work tree, restore base
     run(["reset", "-q", "a.ts"]);

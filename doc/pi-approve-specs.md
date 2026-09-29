@@ -7,7 +7,7 @@
 
 - **Code Change**: New, updated, deleted, or renamed code visible in `git diff` (working tree vs. index, i.e. unstaged changes). Staged changes are excluded. Includes tracked file modifications, tracked file deletions, and untracked files.
 - **Hunk**: The atomic unit of review. For tracked files, a hunk is a single contiguous diff block. For deleted tracked files, the entire deletion is one hunk. For untracked files, the entire file is one hunk.
-- **Per-Hunk Revert**: Rejecting a hunk reverses *only that hunk* via a reconstructed single-hunk patch (`git apply --reject`). Other hunks in the same file remain on disk, and the index is never touched — so staged changes are preserved without any prompt. (If the patch cannot be applied cleanly, the fallback is a whole-file reset to the index.) **Reject all in file** (`R`) and `--reject-all` instead reset the file's entire working tree to the index via `git checkout -- <file>`, which likewise preserves staged changes.
+- **Agent Delegation**: Rejecting a hunk of an ordinary tracked file does **not** mutate git locally. The extension ends the review and sends the agent a message containing the exact hunk diff, asking it to revert only that change. The user re-runs `/approve` to validate the result — the diff view *is* the validation. (Git has no primitive for "discard exactly this unstaged hunk"; the previous `git apply --reverse` hack, with its whole-file-reset fallback, has been removed.) Whole-file rejection (`R`, `--reject-all`) and rejection of untracked/deleted/binary files remain instant git primitives: `git checkout -- <file>` or file deletion. The index is never modified by any reject operation, so staged changes are preserved without any prompt.
 
 ## Requirements
 
@@ -65,7 +65,7 @@ Reject all pending changes. For tracked files, `git checkout --` each modified f
 |---|---|---|
 | **Accept** (`a`) | Hunk stays on disk. | File remains modified (or stays as untracked for new files). |
 | **Accept all in file** (`A`) | All hunks in the current file (already reviewed and not yet seen) are accepted. The overlay advances to the next file. | File remains modified. |
-| **Reject** (`r`) | For tracked files: the single hunk is reversed on disk via `git apply --reverse` of a reconstructed hunk patch; other hunks and any staged changes are untouched. If the patch fails to apply, the whole file is reset to the index and a warning is shown. For untracked files: file is deleted from disk (a single-hunk undo is impossible). | File otherwise unchanged (or no longer exists). |
+| **Reject** (`r`) | For ordinary tracked files: the review **ends** and the agent is asked to revert exactly this hunk (message includes the hunk's diff; see *Reject Flow*). The user re-runs `/approve` to validate. For untracked files: file is deleted from disk instantly. For deleted/binary tracked files: the file is reset to the index instantly. | For agent-reverted hunks: file unchanged until the agent acts, then re-validate. Otherwise unchanged (or no longer exists). |
 | **Reject all in file** (`R`) | The file's working tree is reset to the index (`git checkout -- <file>`) or the untracked file is deleted. All hunks in this file are discarded. Remaining hunks are skipped. | File restored to index state (or no longer exists). |
 | **Revise** (`v`) | Hunk stays on disk. The user's feedback is sent as a user message to the model, triggering a new agent turn. | File remains modified. The model may change it further. |
 | **Quit** (`q`, and hidden `Esc`) | Review ends immediately. All prior decisions (acceptances and rejections) are preserved. Unreviewed hunks remain untouched. | Working tree reflects all decisions made so far. Re-run `/approve` to review remaining hunks. |
@@ -82,7 +82,7 @@ accidentally accepted. `Esc` is not shown in the menu (to keep it short) but sti
 it is documented in the README. The decision line wraps if the overlay is narrower than
 the menu.
 
-**Important**: Rejecting a hunk (`r`) affects only that hunk — previously accepted hunks in the same file are not touched. Only **Reject all in file** (`R`) resets the whole file. The navigation keys (`↑` `↓` `←` `→`) **never accept or reject** — they only move the viewing cursor (see *Navigation*).
+**Important**: Rejecting a hunk (`r`) asks the agent to revert only that hunk — previously accepted hunks in the same file are not touched. Only **Reject all in file** (`R`) resets the whole file. The navigation keys (`↑` `↓` `←` `→`) **never accept or reject** — they only move the viewing cursor (see *Navigation*).
 
 ## Navigation
 
@@ -120,9 +120,9 @@ viewing cursor**: it never decides anything.
 - A decided hunk renders with a marker in its meta line: `[accepted]` or `[rejected]`
   (a file reset via `R` shows `[rejected]` on all its hunks).
 - All action keys (`a` `A` `r` `R` `v`) are **inert** on a decided hunk — navigation and
-  `q`/`Esc` still work. Re-deciding is not supported in v1: the git state already
-  reflects the decision, and re-reversing an already-reverted hunk would fail into the
-  whole-file fallback and destroy the file's remaining changes.
+  `q`/`Esc` still work. Re-deciding is not supported in v1: the git state (or the pending
+  agent revert) already reflects the decision, and requesting it again would either be a
+  no-op or destroy the file's remaining changes.
 
 ### File counter (`file X/Y`)
 
@@ -170,6 +170,34 @@ path/to/file.ts — modified · hunk 1/2 · file 1/3
 4. The model receives this and generates a new turn.
 5. The review does not continue. After the model turn completes, the user must run `/approve` again to review the fresh diff from the new state.
 
+## Reject Flow (agent-reverted hunks)
+
+Rejecting a hunk of an **ordinary tracked file** is delegated to the agent, because git has
+no primitive for discarding exactly one unstaged hunk and the previous local
+(`git apply --reverse`) approach was fragile: when the reconstructed patch did not apply
+cleanly it fell back to resetting the **entire file**, destroying the file's other
+unstaged hunks.
+
+1. User selects **Reject** (`r`) on a hunk of an ordinary tracked file.
+2. The extension calls `pi.sendUserMessage()` with a revert request that names the file
+   and hunk and embeds the hunk's exact diff, instructing: revert **exactly this change**
+   and nothing else in the file — leave all other unstaged hunks and all staged content
+   untouched.
+3. The model receives this and generates a new turn; the user is told to re-run
+   `/approve` to validate.
+4. The review does not continue, even if other hunks were still open. **The diff view is
+   the validation**: if the agent reverted too much or too little, the next `/approve`
+   pass shows it, and the user can push back in chat.
+
+Rejected hunks therefore leave the working tree on the *agent's* next turn, not
+instantly. This is the intended trade-off: failures become **observable and recoverable**
+(a visible wrong diff, fixable by another turn) instead of instant local destruction.
+
+Untracked files, deleted tracked files, and binary files are still rejected **instantly
+and locally** — single-hunk semantics do not apply to them (see their sections): an
+untracked file is deleted, a deleted file is restored from the index, and a binary file
+is reset to the index.
+
 ## Deleted Tracked Files
 
 - Deleted tracked files (visible in `git diff` as all-lines-removed hunks) are included in review.
@@ -186,11 +214,11 @@ path/to/file.ts — modified · hunk 1/2 · file 1/3
 
 ## After Full Review
 
-When all hunks have been resolved (accepted, rejected, or revised):
+When all hunks have been resolved (accepted, rejected, revised, or agent-revert-requested):
 - All accepted changes remain in the working tree, **unstaged**.
 - The user handles `git add` and `git commit` manually.
-- Accepted but unstaged changes will reappear on subsequent `/approve` runs until they are staged or committed.
-- If any hunks were revised, the user must re-run `/approve` after the model's next turn to review the updated diff.
+- Accepted but unstaged changes will reappear on subsequent `/approve` runs until they are staged or committed — by design, the review is a gate to run right before committing, and a re-confirm of an already-accepted hunk is a single keypress.
+- If any hunks were revised or rejected (agent revert), the user must re-run `/approve` after the model's next turn to review/validate the updated diff.
 
 ## Edge Cases
 
@@ -198,8 +226,9 @@ When all hunks have been resolved (accepted, rejected, or revised):
 |---|---|
 | Not a git repo | Error: *"Not a git repository. Approval requires a git repo."* |
 | Clean working tree | Brief notification: *"No changes to review."* |
-| Reject after accepting other hunks in same file | Only the rejected hunk is reversed; accepted hunks are kept. |
-| Single-hunk patch fails to apply (e.g. file edited mid-review) | Fallback: the file is reset to the index and a warning is shown. |
+| Reject after accepting other hunks in same file | Only the rejected hunk is asked of the agent (message names the exact hunk); accepted hunks stay on disk, validated on the next pass. |
+| Reject (agent revert) requested mid-review | Review ends immediately; other open hunks remain untouched on disk and are reviewed on the next pass. |
+| Agent reverts too much / too little | Visible on the next `/approve` run; the user pushes back in chat. Nothing is lost — the index is never modified. |
 | Revise mid-review | Review stops; model gets feedback; user re-runs `/approve` after model turn. |
 | Binary file in working tree | Shown as a single pseudo-hunk with the label `[Binary file]`. No preview is rendered. Accept/reject actions apply the same as for tracked/untracked files. Rejecting a tracked binary resets the working tree to the index; rejecting an untracked binary deletes it. |
 | File has staged changes | Staged content is the *base* of the shown diff. Reversing a hunk only removes the unstaged delta on top of it; the index is never modified, so staged changes survive with no prompt. |
@@ -295,4 +324,5 @@ Shiki themes carry their own color palette. The highlighted code will look like 
 - Persistent "pending review" state across sessions.
 - Inline line-level commenting on hunks (instead of hunk-level revise).
 - Re-deciding a hunk (e.g. undoing an accept) with a safe re-application path.
+- Instant local per-hunk reject without a model round-trip, should the agent-delegation latency ever feel too slow.
 - Stage individual accepted hunks (via `git apply` of accepted patches).

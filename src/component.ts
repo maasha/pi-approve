@@ -13,7 +13,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { FileChange, Hunk, HunkActionDecision } from "./types.ts";
 import type { GitOps, ReviewSummary, HunkView } from "./review.ts";
 import { runReview } from "./review.ts";
-import { buildReviseMessage } from "./revise.ts";
+import { buildReviseMessage, buildRevertMessage } from "./revise.ts";
 import type { Highlighter } from "./highlight.ts";
 import { renderDiffLine } from "./render.ts";
 
@@ -22,6 +22,8 @@ export interface ReviewResult {
   summary: ReviewSummary;
   /** The user message to send to the model on a revise, or null. */
   revisedMessage: string | null;
+  /** One user message per agent-reverted hunk, or null. */
+  revertMessages: string[] | null;
 }
 
 /** Map a single keystroke during the hunk view to a decision, or null to ignore. */
@@ -126,11 +128,14 @@ export class ReviewComponent implements Component, Focusable {
       const { file, hunk, feedback } = summary.revised;
       revisedMessage = buildReviseMessage(file, feedback, hunk.lines);
     }
+    const revertMessages = summary.requestedReverts.length
+      ? summary.requestedReverts.map((r) => buildRevertMessage(r.file, r.hunk))
+      : null;
     this.phase = "done";
     this.requestRender();
     if (!this.doneCalled) {
       this.doneCalled = true;
-      this.finish({ summary, revisedMessage });
+      this.finish({ summary, revisedMessage, revertMessages });
     }
   }
 
