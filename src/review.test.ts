@@ -372,3 +372,66 @@ describe("runReview — file counter", () => {
     expect(step).toBe(3);
   });
 });
+
+
+describe("runReview — resume target", () => {
+  const files = () => [file("a.ts"), file("b.ts")];
+
+  it("starts on the identical hunk in the same file", async () => {
+    const visits: string[] = [];
+    const src = file("a.ts");
+    await runReview(
+      files(),
+      async (v) => {
+        visits.push(`${v.file.path}:${v.hunkIndex}`);
+        return { action: "quit" };
+      },
+      git() as unknown as GitOps,
+      { file: "a.ts", hunk: src.hunks[1]! },
+    );
+    expect(visits).toEqual(["a.ts:1"]);
+  });
+
+  it("falls back to the nearest hunk by line position when content changed", async () => {
+    const visits: string[] = [];
+    const target: Hunk = { header: "@@ -1,3 +1,3 @@", lines: ["+changed"], newStart: 12, oldStart: 12, oldCount: 3, newCount: 3 };
+    await runReview(
+      files(),
+      async (v) => {
+        visits.push(`${v.file.path}:${v.hunkIndex}`);
+        return { action: "quit" };
+      },
+      git() as unknown as GitOps,
+      { file: "a.ts", hunk: target },
+    );
+    // a.ts hunks are at newStart 1 and 10 -> 10 is closest to 12
+    expect(visits).toEqual(["a.ts:1"]);
+  });
+
+  it("starts from the top when the target file is gone (fully reverted)", async () => {
+    const visits: string[] = [];
+    await runReview(
+      files(),
+      async (v) => {
+        visits.push(`${v.file.path}:${v.hunkIndex}`);
+        return { action: "quit" };
+      },
+      git() as unknown as GitOps,
+      { file: "gone.ts", hunk: hunk(["+x"], 1) },
+    );
+    expect(visits).toEqual(["a.ts:0"]);
+  });
+
+  it("no resume target starts from the first hunk (default)", async () => {
+    const visits: string[] = [];
+    await runReview(
+      files(),
+      async (v) => {
+        visits.push(`${v.file.path}:${v.hunkIndex}`);
+        return { action: "quit" };
+      },
+      git() as unknown as GitOps,
+    );
+    expect(visits).toEqual(["a.ts:0"]);
+  });
+});

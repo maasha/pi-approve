@@ -2,11 +2,78 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 import { resolve } from "node:path";
 import { parseArgs } from "./args.ts";
 import { collectChanges, isGitRepo, resetTracked, removeUntracked } from "./git.ts";
-import type { GitOps } from "./review.ts";
+import type { GitOps, ResumeTarget } from "./review.ts";
 import { ReviewComponent, type ReviewResult } from "./component.ts";
 import { getDefaultHighlighter } from "./highlight.ts";
 
 export default function piApprove(pi: ExtensionAPI) {
+  /**
+   * A review ended by a delegated reject (`r`) or a revise (`v`) leaves this
+   * set; when the agent run it triggered settles, the review re-opens at the
+   * hunk that caused it. One slot only — a second settle finds it already
+   * consumed and does nothing.
+   */
+  let pendingReapprove: { dir: string; resume: ResumeTarget | null } | null = null;
+
+  const gitFor = (dir: string): GitOps => ({
+    resetTracked: (p) => resetTracked(dir, p),
+    removeUntracked: (p) => removeUntracked(dir, p),
+  });
+
+  /** Interactive review: collect, open the overlay, dispatch the outcome. */
+  async function runReviewSession(
+    ctx: Pick<ExtensionCommandContext, "ui" | "isIdle">,
+    dir: string,
+    resume: ResumeTarget | null = null,
+  ): Promise<void> {
+    if (!ctx.isIdle()) {
+      ctx.ui.notify("Agent is currently running. Wait for it to finish before reviewing changes.", "error");
+      return;
+    }
+
+    const { files } = await collectChanges(dir);
+    if (files.length === 0) {
+      ctx.ui.notify("No changes to review.", "info");
+      return;
+    }
+
+    // Present in deterministic order: alphabetical by path, then diff order.
+    const sorted = [...files].sort((a, b) => a.path.localeCompare(b.path));
+
+    const result = await ctx.ui.custom<ReviewResult | undefined>(
+      (tui, theme, keybindings, done) =>
+        new ReviewComponent(tui, theme, keybindings, done, sorted, gitFor(dir), getDefaultHighlighter(), resume),
+      { overlay: true, overlayOptions: { width: "100%", anchor: "top-center" } },
+    );
+
+    if (!result) return;
+
+    // The overlay already applied instant git mutations (untracked deletes,
+    // whole-file resets). A revise or a per-hunk reject hands feedback to the
+    // model and arms the auto-reopen (see the agent_settled handler).
+    if (result.revisedMessage) {
+      pendingReapprove = { dir, resume: result.resumeTarget };
+      await pi.sendUserMessage(result.revisedMessage);
+      return;
+    }
+    if (result.revertMessages) {
+      pendingReapprove = { dir, resume: result.resumeTarget };
+      await pi.sendUserMessage(result.revertMessages.join("\n\n"));
+      return;
+    }
+
+    const s = result.summary;
+    const bits: string[] = [];
+    if (s.acceptedHunks) bits.push(`${s.acceptedHunks} accepted`);
+    if (s.rejectedFiles.length) bits.push(`${s.rejectedFiles.length} file(s) reset`);
+    if (s.deletedFiles.length) bits.push(`${s.deletedFiles.length} deleted`);
+    if (s.skippedHunks) bits.push(`${s.skippedHunks} skipped`);
+    ctx.ui.notify(
+      bits.length ? `Review complete: ${bits.join(", ")}. Changes remain unstaged.` : "Review complete.",
+      "info",
+    );
+  }
+
   pi.registerCommand("approve", {
     description: "Require explicit approval of every unstaged change before it can be staged for commit.",
     handler: async (args: string, ctx: ExtensionCommandContext) => {
@@ -32,11 +99,6 @@ export default function piApprove(pi: ExtensionAPI) {
         return;
       }
 
-      const git: GitOps = {
-        resetTracked: (p) => resetTracked(dir, p),
-        removeUntracked: (p) => removeUntracked(dir, p),
-      };
-
       // ---- Bulk: --all -----------------------------------------------------
       if (parsed.all) {
         const { files } = await collectChanges(dir);
@@ -58,66 +120,27 @@ export default function piApprove(pi: ExtensionAPI) {
           return;
         }
         for (const f of files) {
-          if (f.untracked) await git.removeUntracked(f.path);
-          else await git.resetTracked(f.path);
+          if (f.untracked) await gitFor(dir).removeUntracked(f.path);
+          else await gitFor(dir).resetTracked(f.path);
         }
         ctx.ui.notify(`Rejected all ${files.length} file(s).`, "info");
         return;
       }
 
       // ---- Interactive review ---------------------------------------------
-      if (!ctx.isIdle()) {
-        ctx.ui.notify("Agent is currently running. Wait for it to finish before reviewing changes.", "error");
-        return;
-      }
-
-      const { files } = await collectChanges(dir);
-      if (files.length === 0) {
-        ctx.ui.notify("No changes to review.", "info");
-        return;
-      }
-
-      // Present in deterministic order: alphabetical by path, then diff order.
-      const sorted = [...files].sort((a, b) => a.path.localeCompare(b.path));
-
-      const result = await ctx.ui.custom<ReviewResult | undefined>(
-        (tui, theme, keybindings, done) =>
-          new ReviewComponent(
-            tui,
-            theme,
-            keybindings,
-            done,
-            sorted,
-            git,
-            getDefaultHighlighter(),
-          ),
-        { overlay: true, overlayOptions: { width: "100%", anchor: "top-center" } },
-      );
-
-      if (!result) return;
-
-      // The overlay already applied instant git mutations (untracked deletes,
-      // whole-file resets). A revise or a per-hunk reject hands feedback to
-      // the model; the review has ended either way.
-      if (result.revisedMessage) {
-        await pi.sendUserMessage(result.revisedMessage);
-        return;
-      }
-      if (result.revertMessages) {
-        await pi.sendUserMessage(result.revertMessages.join("\n\n"));
-        return;
-      }
-
-      const s = result.summary;
-      const bits: string[] = [];
-      if (s.acceptedHunks) bits.push(`${s.acceptedHunks} accepted`);
-      if (s.rejectedFiles.length) bits.push(`${s.rejectedFiles.length} file(s) reset`);
-      if (s.deletedFiles.length) bits.push(`${s.deletedFiles.length} deleted`);
-      if (s.skippedHunks) bits.push(`${s.skippedHunks} skipped`);
-      ctx.ui.notify(
-        bits.length ? `Review complete: ${bits.join(", ")}. Changes remain unstaged.` : "Review complete.",
-        "info",
-      );
+      await runReviewSession(ctx, dir);
     },
+  });
+
+  // ---- Auto-reopen after an agent-revert / revise turn -----------------------
+  // When a review ended by delegating work to the agent (per-hunk reject or
+  // revise), the review re-opens as soon as that agent run fully settles,
+  // resuming at the hunk that was rejected/revised.
+  pi.on("agent_settled", async (event, ctx) => {
+    if (!pendingReapprove || ctx.mode !== "tui") return;
+    const { dir, resume } = pendingReapprove;
+    pendingReapprove = null;
+    if (!ctx.isIdle()) return;
+    await runReviewSession(ctx, dir, resume);
   });
 }

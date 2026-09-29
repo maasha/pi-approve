@@ -65,10 +65,10 @@ Reject all pending changes. For tracked files, `git checkout --` each modified f
 |---|---|---|
 | **Accept** (`a`) | Hunk stays on disk. | File remains modified (or stays as untracked for new files). |
 | **Accept all in file** (`A`) | All hunks in the current file (already reviewed and not yet seen) are accepted. The overlay advances to the next file. | File remains modified. |
-| **Reject** (`r`) | For ordinary tracked files: the review **ends** and the agent is asked to revert exactly this hunk (message includes the hunk's diff; see *Reject Flow*). The user re-runs `/approve` to validate. For untracked files: file is deleted from disk instantly. For deleted/binary tracked files: the file is reset to the index instantly. | For agent-reverted hunks: file unchanged until the agent acts, then re-validate. Otherwise unchanged (or no longer exists). |
+| **Reject** (`r`) | For ordinary tracked files: the review **ends** and the agent is asked to revert exactly this hunk (message includes the hunk's diff; see *Reject Flow*). When the agent settles, the review **re-opens automatically** at this hunk (see *Auto-reopen*). For untracked files: file is deleted from disk instantly. For deleted/binary tracked files: the file is reset to the index instantly. | For agent-reverted hunks: file unchanged until the agent acts, then re-validated in the reopened review. Otherwise unchanged (or no longer exists). |
 | **Reject all in file** (`R`) | The file's working tree is reset to the index (`git checkout -- <file>`) or the untracked file is deleted. All hunks in this file are discarded. Remaining hunks are skipped. | File restored to index state (or no longer exists). |
-| **Revise** (`v`) | Hunk stays on disk. The user's feedback is sent as a user message to the model, triggering a new agent turn. | File remains modified. The model may change it further. |
-| **Quit** (`q`, and hidden `Esc`) | Review ends immediately. All prior decisions (acceptances and rejections) are preserved. Unreviewed hunks remain untouched. | Working tree reflects all decisions made so far. Re-run `/approve` to review remaining hunks. |
+| **Revise** (`v`) | Hunk stays on disk. The user's feedback is sent as a user message to the model, triggering a new agent turn. The review re-opens automatically when the agent settles (see *Auto-reopen*). | File remains modified. The model may change it further. |
+| **Quit** (`q`, and hidden `Esc`) | Review ends immediately. All prior decisions (acceptances and rejections) are preserved. Unreviewed hunks remain untouched. | Working tree reflects all decisions made so far. No auto-reopen is armed. |
 
 **Key bindings and menu**: The in-overlay menu is two lines:
 
@@ -168,7 +168,7 @@ path/to/file.ts — modified · hunk 1/2 · file 1/3
 2. Prompt for free-text feedback (e.g., *"Use camelCase here"*).
 3. The extension calls `pi.sendUserMessage()` with: *"Please revise `<file>`: <feedback>. The relevant hunk was: <diff context>."*
 4. The model receives this and generates a new turn.
-5. The review does not continue. After the model turn completes, the user must run `/approve` again to review the fresh diff from the new state.
+5. When the agent run settles, the review **re-opens automatically** at the same hunk (see *Auto-reopen* in the Reject Flow section) so the user can validate the model's changes without re-running `/approve` manually.
 
 ## Reject Flow (agent-reverted hunks)
 
@@ -188,6 +188,25 @@ unstaged hunks.
 4. The review does not continue, even if other hunks were still open. **The diff view is
    the validation**: if the agent reverted too much or too little, the next `/approve`
    pass shows it, and the user can push back in chat.
+
+### Auto-reopen
+
+A reject (or revise) never leaves the user with a manual re-entry step: when the agent run
+triggered by the message has **fully settled**, the review **re-opens automatically** on the
+fresh diff, resuming at the hunk that was rejected (or revised).
+
+- The re-opened review collects the working tree again and builds a fresh hunk list — the
+  agent's edits are what the user validates.
+- **Resume location**: the cursor starts on the best match of the reviewed hunk in the
+  fresh list: same file + identical content first (e.g. the agent has not reverted it yet),
+  then the hunk closest by line position in that file (content changed), then the top of
+  the list (the file/hunk is gone).
+- If the fresh diff is empty (the agent fully complied and nothing else is pending), the
+  reopen shows a brief *"No changes to review."* notification and stops.
+- The loop can repeat: the reopened review can itself end in another reject/revise, which
+  re-arms it. Quitting (`q`/`Esc`) or a normal auto-close does not re-arm it.
+- Only one reopen is pending at a time; an extra `agent_settled` (e.g. a queued
+  continuation) finds no pending reopen and does nothing.
 
 Rejected hunks therefore leave the working tree on the *agent's* next turn, not
 instantly. This is the intended trade-off: failures become **observable and recoverable**
@@ -218,7 +237,7 @@ When all hunks have been resolved (accepted, rejected, revised, or agent-revert-
 - All accepted changes remain in the working tree, **unstaged**.
 - The user handles `git add` and `git commit` manually.
 - Accepted but unstaged changes will reappear on subsequent `/approve` runs until they are staged or committed — by design, the review is a gate to run right before committing, and a re-confirm of an already-accepted hunk is a single keypress.
-- If any hunks were revised or rejected (agent revert), the user must re-run `/approve` after the model's next turn to review/validate the updated diff.
+- If any hunks were revised or rejected (agent revert), the review re-opens automatically when the agent settles, at the hunk that was revised or rejected (see *Auto-reopen*).
 
 ## Edge Cases
 
@@ -226,10 +245,12 @@ When all hunks have been resolved (accepted, rejected, revised, or agent-revert-
 |---|---|
 | Not a git repo | Error: *"Not a git repository. Approval requires a git repo."* |
 | Clean working tree | Brief notification: *"No changes to review."* |
-| Reject after accepting other hunks in same file | Only the rejected hunk is asked of the agent (message names the exact hunk); accepted hunks stay on disk, validated on the next pass. |
-| Reject (agent revert) requested mid-review | Review ends immediately; other open hunks remain untouched on disk and are reviewed on the next pass. |
-| Agent reverts too much / too little | Visible on the next `/approve` run; the user pushes back in chat. Nothing is lost — the index is never modified. |
-| Revise mid-review | Review stops; model gets feedback; user re-runs `/approve` after model turn. |
+| Reject after accepting other hunks in same file | Only the rejected hunk is asked of the agent (message names the exact hunk); accepted hunks stay on disk and are re-presented in the reopened review for confirmation. |
+| Reject (agent revert) requested mid-review | Review ends immediately; other open hunks remain untouched on disk and are reviewed in the auto-reopened review after the agent turn. |
+| Agent reverts too much / too little | Visible in the auto-reopened review at the rejected hunk; the user pushes back in chat. Nothing is lost — the index is never modified. |
+| Auto-reopen fires but the diff is clean | Brief *"No changes to review."* notification; the loop stops. |
+| Extra `agent_settled` (queued continuation, etc.) | Only one reopen is pending at a time; the extra event is a no-op. |
+| Revise mid-review | Review stops; model gets feedback; the review re-opens automatically at the same hunk when the agent settles. |
 | Binary file in working tree | Shown as a single pseudo-hunk with the label `[Binary file]`. No preview is rendered. Accept/reject actions apply the same as for tracked/untracked files. Rejecting a tracked binary resets the working tree to the index; rejecting an untracked binary deletes it. |
 | File has staged changes | Staged content is the *base* of the shown diff. Reversing a hunk only removes the unstaged delta on top of it; the index is never modified, so staged changes survive with no prompt. |
 

@@ -11,6 +11,16 @@ export interface GitOps {
 /** Review state of a single hunk. */
 export type HunkStatus = "open" | "accepted" | "rejected";
 
+/**
+ * Where to place the cursor when a review (re)starts: the hunk the previous
+ * pass ended on (a delegated reject or a revise). The list is rebuilt from
+ * the fresh diff, so the hunk is re-located by identity heuristics.
+ */
+export interface ResumeTarget {
+  file: string;
+  hunk: Hunk;
+}
+
 /** The view presented to the user for the hunk under the cursor. */
 export interface HunkView {
   file: FileChange;
@@ -50,6 +60,31 @@ interface Entry {
   hunkIndex: number;
 }
 
+/** Locate the resume target in a freshly built hunk list. */
+export function findStartIdx(flat: Entry[], resume?: ResumeTarget): number {
+  if (!resume) return 0;
+  const key = (h: Hunk) => h.lines.join("\n");
+  const target = key(resume.hunk);
+  // 1. Same file, identical content (e.g. the agent didn't revert it yet).
+  for (let j = 0; j < flat.length; j++) {
+    if (flat[j]!.file.path === resume.file && key(flat[j]!.hunk) === target) return j;
+  }
+  // 2. Closest by line position in that file (content changed / hunk count
+  //    shifted, but the file survived).
+  let best = -1;
+  let bestDist = Infinity;
+  for (let j = 0; j < flat.length; j++) {
+    if (flat[j]!.file.path !== resume.file) continue;
+    const d = Math.abs(flat[j]!.hunk.newStart - resume.hunk.newStart);
+    if (d < bestDist) {
+      bestDist = d;
+      best = j;
+    }
+  }
+  // 3. File gone (fully reverted) or unknown: start from the top.
+  return best === -1 ? 0 : best;
+}
+
 /**
  * Drive an interactive review over the collected file changes.
  *
@@ -65,12 +100,17 @@ interface Entry {
  * mutations happen only for untracked files, deleted/binary files, and
  * whole-file rejects.
  *
+ * When `resume` is given (a re-opened review), the cursor starts on the
+ * best-matching hunk: same file + identical content first, then the hunk
+ * closest by line position in that file, then the first hunk overall.
+ *
  * `git` is injectable for testing.
  */
 export async function runReview(
   files: FileChange[],
   decide: (view: HunkView) => Promise<HunkActionDecision>,
   git: GitOps,
+  resume?: ResumeTarget,
 ): Promise<ReviewSummary> {
   const summary: ReviewSummary = {
     rejectedFiles: [],
@@ -95,6 +135,7 @@ export async function runReview(
   if (flat.length === 0) return summary;
 
   const status: HunkStatus[] = flat.map(() => "open");
+  const cur0 = findStartIdx(flat, resume);
 
   // ---- Helpers -------------------------------------------------------------
   const isFileOpen = (path: string): boolean => {
@@ -219,7 +260,7 @@ export async function runReview(
   };
 
   // ---- Main loop -----------------------------------------------------------
-  let cur = 0;
+  let cur = cur0;
   for (;;) {
     const view = makeView(cur);
     const d = await decide(view);

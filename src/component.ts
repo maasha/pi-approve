@@ -11,7 +11,7 @@ import {
 } from "@earendil-works/pi-tui";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { FileChange, Hunk, HunkActionDecision } from "./types.ts";
-import type { GitOps, ReviewSummary, HunkView } from "./review.ts";
+import type { GitOps, ReviewSummary, HunkView, ResumeTarget } from "./review.ts";
 import { runReview } from "./review.ts";
 import { buildReviseMessage, buildRevertMessage } from "./revise.ts";
 import type { Highlighter } from "./highlight.ts";
@@ -24,6 +24,9 @@ export interface ReviewResult {
   revisedMessage: string | null;
   /** One user message per agent-reverted hunk, or null. */
   revertMessages: string[] | null;
+  /** The hunk this pass ended on (revise or delegated reject) — where a
+   * re-opened review should resume. Null when it ended normally. */
+  resumeTarget: ResumeTarget | null;
 }
 
 /** Map a single keystroke during the hunk view to a decision, or null to ignore. */
@@ -107,6 +110,7 @@ export class ReviewComponent implements Component, Focusable {
     private readonly files: FileChange[],
     private readonly git: GitOps,
     private readonly highlighter: Highlighter,
+    private readonly resume: ResumeTarget | null = null,
   ) {
     // Preload the highlighter for every non-plaintext language up front so the
     // first hunk renders immediately instead of stalling on a grammar fetch.
@@ -122,20 +126,26 @@ export class ReviewComponent implements Component, Focusable {
   private async start(): Promise<void> {
     // Bind explicitly: passing a bare method reference (`this.decide`) would
     // detach `this` in strict-mode ESM and crash when the engine invokes it.
-    const summary = await runReview(this.files, this.decide.bind(this), this.git);
+    const summary = await runReview(this.files, this.decide.bind(this), this.git, this.resume ?? undefined);
     let revisedMessage: string | null = null;
+    let resumeTarget: ResumeTarget | null = null;
     if (summary.revised) {
       const { file, hunk, feedback } = summary.revised;
       revisedMessage = buildReviseMessage(file, feedback, hunk.lines);
+      resumeTarget = { file, hunk };
     }
     const revertMessages = summary.requestedReverts.length
       ? summary.requestedReverts.map((r) => buildRevertMessage(r.file, r.hunk))
       : null;
+    if (revertMessages && !resumeTarget) {
+      const r = summary.requestedReverts.at(-1)!;
+      resumeTarget = { file: r.file, hunk: r.hunk };
+    }
     this.phase = "done";
     this.requestRender();
     if (!this.doneCalled) {
       this.doneCalled = true;
-      this.finish({ summary, revisedMessage, revertMessages });
+      this.finish({ summary, revisedMessage, revertMessages, resumeTarget });
     }
   }
 

@@ -195,3 +195,62 @@ describe("end-to-end review in a real repo", () => {
     run(["reset", "-q", "a.ts"]);
   });
 });
+
+
+describe("re-opened review resumes at the right hunk", () => {
+  it("after the agent edits the file, resume lands on the surviving hunk", async () => {
+    run(["checkout", "-q", "--", "a.ts"]);
+    const lines: string[] = [];
+    for (let i = 1; i <= 30; i++) lines.push(`r${i}`);
+    await writeFile(join(dir, "a.ts"), lines.join("\n") + "\n");
+    run(["add", "a.ts"]);
+    run(["commit", "-q", "-m", "resume-base"]);
+    let base = (await readFile(join(dir, "a.ts"), "utf8")).split("\n");
+    if (base[base.length - 1] === "") base.pop();
+    base[4] = "r5-EDIT";
+    base[24] = "r25-EDIT";
+    await writeFile(join(dir, "a.ts"), base.join("\n") + "\n");
+
+    const { files } = await collectChanges(dir);
+    const a = files.find((f) => f.path === "a.ts")!;
+    expect(a.hunks.length).toBe(2);
+
+    // Pass 1: reject hunk 2 -> delegated to the agent (review ends).
+    const s1 = await runReview(
+      files,
+      async (v) => (v.hunk === a.hunks[1] ? { action: "reject" } : { action: "accept" }),
+      gitOps(dir),
+    );
+    expect(s1.requestedReverts).toHaveLength(1);
+    const resumeTarget = s1.requestedReverts[0]!;
+
+    // The agent "acts": it fully reverts hunk 2 (back to the committed
+    // "r25"), so hunk 2 leaves the diff. The resume target — hunk 2's old
+    // content — matches nothing; it must fall back to proximity and land on
+    // the surviving hunk 1.
+    let wt = (await readFile(join(dir, "a.ts"), "utf8")).split("\n");
+    if (wt[wt.length - 1] === "") wt.pop();
+    wt[24] = "r25"; // agent complied: hunk 2 reverted
+    await writeFile(join(dir, "a.ts"), wt.join("\n") + "\n");
+
+    // Pass 2 (auto-reopened): fresh diff has only hunk 1 (newStart 5);
+    // resumeTarget still says newStart 25.
+    const { files: files2 } = await collectChanges(dir);
+    const a2 = files2.find((f) => f.path === "a.ts")!;
+    expect(a2.hunks.length).toBe(1);
+    let seen: string[] = [];
+    await runReview(
+      files2,
+      async (v) => {
+        seen.push(`${v.file.path}:${v.hunkIndex}`);
+        return { action: "accept" };
+      },
+      gitOps(dir),
+      resumeTarget,
+    );
+    expect(seen).toEqual(["a.ts:0"]);
+
+    // cleanup
+    run(["checkout", "-q", "--", "a.ts"]);
+  });
+});
