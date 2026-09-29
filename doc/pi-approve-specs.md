@@ -80,10 +80,87 @@ Reject all pending changes. For tracked files, `git checkout --` each modified f
 There is **no default action** — Enter does nothing in the hunk view, so nothing can be
 accidentally accepted. `Esc` is not shown in the menu (to keep it short) but still quits;
 it is documented in the README. The decision line wraps if the overlay is narrower than
-the menu. The arrow keys are displayed but not yet functional (free navigation is a
-planned feature: a pure viewing cursor that never accepts or rejects).
+the menu.
 
-**Important**: Rejecting a hunk (`r`) affects only that hunk — previously accepted hunks in the same file are not touched. Only **Reject all in file** (`R`) resets the whole file.
+**Important**: Rejecting a hunk (`r`) affects only that hunk — previously accepted hunks in the same file are not touched. Only **Reject all in file** (`R`) resets the whole file. The navigation keys (`↑` `↓` `←` `→`) **never accept or reject** — they only move the viewing cursor (see *Navigation*).
+
+## Navigation
+
+Reviewing a multi-hunk change out of order can matter for understanding (a later hunk
+may clarify an earlier one), so the user navigates freely. Navigation is a **pure
+viewing cursor**: it never decides anything.
+
+### The hunk list
+
+- At review start, a **static hunk list** is built: files alphabetical, hunks in diff
+  order — the same order as the presentation today.
+- Every hunk starts as **undecided**. It becomes **decided** when the user accepts it
+  (`a`/`A`), rejects it (`r`), or its whole file is reset/deleted (`R`). A file left by
+  `A` has all its hunks decided-accepted; a file rejected by `R` has all its hunks
+  decided-rejected.
+- The list never shrinks or reorders. Decided hunks remain in it, visible but **inert**.
+
+### Cursor movement
+
+| Key | Effect |
+|---|---|
+| `↑` | Previous hunk in the static list. May land on a decided hunk (viewing it again). Clamps at the first hunk. |
+| `↓` | Next hunk in the static list. Clamps at the last hunk. |
+| `←` | Previous **open** file (a file with ≥1 undecided hunk). Lands on that file's **last** undecided hunk. Skips files with no undecided hunks. Clamps if none earlier. |
+| `→` | Next **open** file. Lands on that file's **first** undecided hunk. Skips files with no undecided hunks. Clamps if none later. |
+
+- After any decision on the current hunk, the cursor **auto-advances** to the next
+  undecided hunk (any file) so the user is not left standing on an inert hunk. If no
+  undecided hunk remains, the review ends (see below).
+- `A` / `R` while viewing a file decide every hunk in that file at once; the cursor then
+  auto-advances as above.
+
+### Decided hunks
+
+- A decided hunk renders with a marker in its meta line: `[accepted]` or `[rejected]`
+  (a file reset via `R` shows `[rejected]` on all its hunks).
+- All action keys (`a` `A` `r` `R` `v`) are **inert** on a decided hunk — navigation and
+  `q`/`Esc` still work. Re-deciding is not supported in v1: the git state already
+  reflects the decision, and re-reversing an already-reverted hunk would fail into the
+  whole-file fallback and destroy the file's remaining changes.
+
+### File counter (`file X/Y`)
+
+The meta line shows the current file's position among files that still have work left:
+
+```
+path/to/file.ts — modified · hunk 1/2 · file 1/3
+```
+
+- **Y** = number of files with ≥1 **undecided** hunk. A file leaves the count the moment
+  its last undecided hunk is decided — by acceptance or rejection. (`A` on the last open
+  file drops Y immediately, even though the accepted changes are still on disk: there is
+  nothing left to review there.)
+- **X** = the viewed file's 1-based position among those files, in the original
+  alphabetical order.
+- When the viewed file itself becomes fully decided (via `A`/`R`), the displayed `X/Y`
+  **freezes** on that file until the cursor moves (the auto-advance after the decision
+  handles this immediately in practice).
+- Y updates live: deciding the last open hunk of one file renumbers the counter for any
+  file the cursor next lands on.
+
+### End of review
+
+- The review **auto-closes** when every hunk in the static list has been decided.
+- `q` / `Esc` always quit immediately, preserving every decision made so far; undecided
+  hunks are untouched on disk. (An undecided hunk is a *skipped* hunk — there is no
+  separate skip action.)
+
+### Edge cases
+
+| Scenario | Behavior |
+|---|---|
+| `↑` on first hunk / `↓` on last hunk | Clamp — no-op. |
+| `←`/`→` with no other open file in that direction | Clamp — no-op. |
+| `→` from a hunk in the last open file | No-op; the file counter makes this visible (`file 3/3`). |
+| Viewed file just got fully decided | Meta counter freezes on that file until the cursor moves; action keys are inert. |
+| All hunks decided while reviewing | Overlay closes automatically; summary notification as today. |
+| No open file in a direction but more hunks exist in the *same* file | `←`/`→` stay no-ops; `↑`/`↓` still move within the file. |
 
 ## Revise Flow
 
@@ -216,10 +293,6 @@ Shiki themes carry their own color palette. The highlighted code will look like 
 - `/approve --stage` flag to auto-stage approved changes.
 - `/approve --commit` flag to auto-commit with a generated message.
 - Persistent "pending review" state across sessions.
-- **Free navigation** (arrow keys, already shown in the menu): a pure viewing
-cursor over the static, start-of-review hunk list. Arrows never accept or
-reject; decided hunks remain visible but inert so review order stays free.
-Auto-close when every hunk has been decided; `q`/`Esc` always quit, preserving
-decisions made so far.
-- Inline line-level commenting on hunks.
+- Inline line-level commenting on hunks (instead of hunk-level revise).
+- Re-deciding a hunk (e.g. undoing an accept) with a safe re-application path.
 - Stage individual accepted hunks (via `git apply` of accepted patches).
