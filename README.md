@@ -16,27 +16,17 @@ After the agent edits your files, run `/approve` to walk through each diff hunk 
 
 ## Installation
 
-1. **Clone the repository**:
-   ```bash
-   git clone https://github.com/maasha/pi-approve.git
-   cd pi-approve
-   ```
+Install from GitHub:
 
-2. **Install dependencies**:
-   ```bash
-   npm install
-   ```
+```bash
+pi install git:github.com/maasha/pi-approve
+```
 
-3. **Load the extension** in Pi:
-   ```bash
-   pi --extension ./src/index.ts
-   ```
+Or try it once without adding it to settings:
 
-   Or copy the directory into Pi's extensions path so it loads automatically:
-   ```bash
-   mkdir -p ~/.pi/agent/extensions
-   cp -r . ~/.pi/agent/extensions/pi-approve
-   ```
+```bash
+pi -e git:github.com/maasha/pi-approve
+```
 
 ## Usage
 
