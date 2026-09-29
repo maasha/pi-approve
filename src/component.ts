@@ -36,20 +36,34 @@ export function hunkKeyToAction(data: string): HunkActionDecision | null {
 }
 
 /**
- * Render the key-binding menu. Fits on one line when `innerWidth` is wide
- * enough; otherwise wraps after "[r] reject". Esc is intentionally not shown
- * (it still quits); it is documented in the README instead.
+ * Render the key-binding menu: a decision line and a navigation line.
+ * The decision line fits on one line when `innerWidth` is wide enough;
+ * otherwise it wraps after "[A] accept file". Esc is intentionally not
+ * shown (it still quits); it is documented in the README instead.
  */
 export function formatMenu(theme: { fg(color: string, text: string): string }, innerWidth: number): string[] {
-  const parts = [
-    `${theme.fg("success", "[a] accept")} ${theme.fg("dim", "·")} ${theme.fg("success", "[A] accept file")}`,
-    `${theme.fg("error", "[r] reject")} ${theme.fg("dim", "·")} ${theme.fg("error", "[R] reject file")}`,
-    `${theme.fg("warning", "[v] revise")} ${theme.fg("dim", "·")} ${theme.fg("dim", "[q] quit")}`,
+  const items = [
+    theme.fg("success", "[a] accept hunk"),
+    theme.fg("error", "[r] reject hunk"),
+    theme.fg("success", "[A] accept file"),
+    theme.fg("error", "[R] reject file"),
+    theme.fg("warning", "[v] revise"),
   ];
-  const line1 = parts[0]!;
-  const rest = parts.slice(1).join(" ");
-  const fits = visibleWidth(line1) + 1 + visibleWidth(rest) <= innerWidth;
-  return fits ? [line1 + " " + rest] : [line1, rest];
+  const sep = theme.fg("dim", " · ");
+  const whole = items.join(sep);
+  const firstLine = visibleWidth(whole) <= innerWidth
+    ? [whole]
+    : [items.slice(0, 3).join(sep), items.slice(3).join(sep)];
+  const nav = [
+    "[↑] prev hunk",
+    "[↓] next hunk",
+    "[←] prev file",
+    "[→] next file",
+    "[q] quit",
+  ]
+    .map((s) => theme.fg("dim", s))
+    .join(theme.fg("dim", " · "));
+  return [...firstLine, nav];
 }
 
 type Phase = "busy" | "hunk" | "revise" | "done";

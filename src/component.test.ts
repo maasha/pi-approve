@@ -46,31 +46,33 @@ describe("hunkKeyToAction", () => {
 
 describe("formatMenu", () => {
   const theme = { fg: (_c: string, s: string) => s };
+  const NAV = "[↑] prev hunk · [↓] next hunk · [←] prev file · [→] next file · [q] quit";
 
-  it("fits on one line when there is enough width", () => {
+  it("renders two lines when there is enough width", () => {
     const lines = formatMenu(theme, 120);
-    expect(lines).toHaveLength(1);
-    const l = lines[0]!;
-    expect(l).toContain("[a] accept");
-    expect(l).toContain("[A] accept file");
-    expect(l).toContain("[r] reject");
-    expect(l).toContain("[R] reject file");
-    expect(l).toContain("[v] revise");
-    expect(l).toContain("[q] quit");
-    expect(l).not.toContain("Esc");
-    expect(l).not.toContain("default");
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toBe(
+      "[a] accept hunk · [r] reject hunk · [A] accept file · [R] reject file · [v] revise",
+    );
+    expect(lines[1]).toBe(NAV);
   });
 
-  it("wraps to two lines when the width is too small", () => {
+  it("wraps the first line when the width is too small", () => {
     const lines = formatMenu(theme, 40);
-    expect(lines).toHaveLength(2);
-    expect(lines[0]).toContain("[a] accept");
-    expect(lines[1]).toContain("[q] quit");
-    // Every item appears exactly once across the two lines.
-    const joined = lines.join("\n");
-    for (const item of ["[a] accept", "[A] accept file", "[r] reject", "[R] reject file", "[v] revise", "[q] quit"]) {
-      expect(joined.split(item).length - 1).toBe(1);
+    expect(lines).toHaveLength(3);
+    // First line is split into two parts; nav line is intact and last.
+    expect(lines[2]).toBe(NAV);
+    const joined = lines.slice(0, 2).join(" · ");
+    for (const item of [
+      "[a] accept hunk",
+      "[r] reject hunk",
+      "[A] accept file",
+      "[R] reject file",
+      "[v] revise",
+    ]) {
+      expect(joined).toContain(item);
     }
+    expect(lines.join("\n")).not.toContain("Esc");
   });
 });
 

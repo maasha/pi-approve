@@ -59,7 +59,9 @@ When you run `/approve`, a modal overlay appears for each diff hunk:
 │    const lines = tokens.map(...)                                        │
 │                                                                         │
 │ ────────────────────────────────────────────────────────────────────────│
-│  [a] accept · [A] accept file · [r] reject · [R] reject file · [v] revise · [q] quit │
+│  [a] accept hunk · [r] reject hunk · [A] accept file · [R] reject file  │
+│  [v] revise                                                             │
+│  [↑] prev hunk · [↓] next hunk · [←] prev file · [→] next file · [q] quit │
 ╰─────────────────────────────────────────────────────────────────────────╯
 ```
 
@@ -72,6 +74,8 @@ When you run `/approve`, a modal overlay appears for each diff hunk:
 | `v` | **Revise** — type feedback, which is sent to the agent immediately; review stops and you re-run `/approve` later |
 | `q` | Quit the review |
 | `Esc` | Quit the review (also cancels the revise prompt). Not shown in the on-screen menu, but works. |
+
+The arrow keys (`↑ ↓ ← →`) are shown in the menu but not yet functional — free navigation (a pure viewing cursor that never accepts or rejects) is planned.
 
 ## How it works
 

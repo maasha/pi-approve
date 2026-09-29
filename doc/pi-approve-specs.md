@@ -70,12 +70,18 @@ Reject all pending changes. For tracked files, `git checkout --` each modified f
 | **Revise** (`v`) | Hunk stays on disk. The user's feedback is sent as a user message to the model, triggering a new agent turn. | File remains modified. The model may change it further. |
 | **Quit** (`q`, and hidden `Esc`) | Review ends immediately. All prior decisions (acceptances and rejections) are preserved. Unreviewed hunks remain untouched. | Working tree reflects all decisions made so far. Re-run `/approve` to review remaining hunks. |
 
-**Key bindings and menu**: The in-overlay menu reads
-`[a] accept · [A] accept file · [r] reject · [R] reject file · [v] revise · [q] quit`.
+**Key bindings and menu**: The in-overlay menu is two lines:
+
+```
+[a] accept hunk · [r] reject hunk · [A] accept file · [R] reject file · [v] revise
+[↑] prev hunk · [↓] next hunk · [←] prev file · [→] next file · [q] quit
+```
+
 There is **no default action** — Enter does nothing in the hunk view, so nothing can be
 accidentally accepted. `Esc` is not shown in the menu (to keep it short) but still quits;
-it is documented in the README. The menu renders on a single line when the overlay is wide
-enough and wraps to two lines otherwise.
+it is documented in the README. The decision line wraps if the overlay is narrower than
+the menu. The arrow keys are displayed but not yet functional (free navigation is a
+planned feature: a pure viewing cursor that never accepts or rejects).
 
 **Important**: Rejecting a hunk (`r`) affects only that hunk — previously accepted hunks in the same file are not touched. Only **Reject all in file** (`R`) resets the whole file.
 
@@ -210,5 +216,10 @@ Shiki themes carry their own color palette. The highlighted code will look like 
 - `/approve --stage` flag to auto-stage approved changes.
 - `/approve --commit` flag to auto-commit with a generated message.
 - Persistent "pending review" state across sessions.
+- **Free navigation** (arrow keys, already shown in the menu): a pure viewing
+cursor over the static, start-of-review hunk list. Arrows never accept or
+reject; decided hunks remain visible but inert so review order stays free.
+Auto-close when every hunk has been decided; `q`/`Esc` always quit, preserving
+decisions made so far.
 - Inline line-level commenting on hunks.
 - Stage individual accepted hunks (via `git apply` of accepted patches).
