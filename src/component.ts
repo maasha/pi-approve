@@ -52,7 +52,6 @@ type Phase = "busy" | "hunk" | "revise" | "confirm" | "done";
  * presentation.
  */
 export class ReviewComponent implements Component, Focusable {
-  readonly width = 88;
   focused = false;
 
   private phase: Phase = "busy";
@@ -218,8 +217,9 @@ export class ReviewComponent implements Component, Focusable {
     }
   }
 
-  render(_viewportWidth: number): string[] {
-    const w = this.width;
+  render(viewportWidth: number): string[] {
+    // Span the full overlay width (the pi terminal), with a sane floor.
+    const w = Math.max(40, viewportWidth);
     const inner = w - 2;
     const box = (s: string): string => {
       const vis = visibleWidth(s);
