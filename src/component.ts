@@ -245,6 +245,15 @@ export class ReviewComponent implements Component, Focusable {
     lines.push(box(` ${this.theme.fg("accent", "⚖  Approve review")}`));
     lines.push(box(""));
 
+    // Span the whole terminal height so the overlay size is constant (and its
+    // position therefore stable) no matter how big the current hunk is.
+    const termRows = this.tui.terminal?.rows ?? 0;
+    const finish = (): string[] => {
+      while (lines.length < termRows - 1) lines.push(box(""));
+      lines.push(bottom);
+      return lines;
+    };
+
     const file = this.currentFile;
     if ((this.phase === "hunk" || this.phase === "busy") && file && this.currentHunk) {
       lines.push(box(` ${this.theme.fg("text", file.path)}`));
@@ -254,8 +263,16 @@ export class ReviewComponent implements Component, Focusable {
         lines.push(box(` ${this.theme.fg("dim", this.currentHunk.header)}`));
       }
       lines.push(box(""));
-      for (const l of this.renderedLines) {
+      // Cap the diff to the rows the window can hold (top/bottom borders,
+      // title, path, meta, header, blanks, menu), so the box never exceeds
+      // the terminal and off-screen lines are simply dropped from the end.
+      const overhead = 9 + formatMenu(this.theme, inner).length;
+      const maxDiff = Math.max(4, termRows > 0 ? termRows - overhead : this.renderedLines.length);
+      for (const l of this.renderedLines.slice(0, maxDiff)) {
         lines.push(box(l));
+      }
+      if (this.renderedLines.length > maxDiff) {
+        lines.push(box(` ${this.theme.fg("dim", "…")}`));
       }
       lines.push(box(""));
       for (const menuLine of formatMenu(this.theme, inner)) {
@@ -286,8 +303,7 @@ export class ReviewComponent implements Component, Focusable {
       lines.push(box(""));
     }
 
-    lines.push(bottom);
-    return lines;
+    return finish();
   }
 
   private metaLine(file: FileChange): string {

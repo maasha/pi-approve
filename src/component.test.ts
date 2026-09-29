@@ -104,6 +104,7 @@ describe("ReviewComponent callback `this` binding (regression)", () => {
   let captured: {
     decide?: (v: HunkView) => Promise<HunkActionDecision>;
     git?: GitOps;
+    component?: unknown;
   };
 
   beforeEach(async () => {
@@ -140,8 +141,8 @@ describe("ReviewComponent callback `this` binding (regression)", () => {
     };
 
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    new Ctor(
-      { requestRender: () => {} } as never, // TUI
+    const component = new Ctor(
+      { requestRender: () => {}, terminal: { rows: 40 } } as never, // TUI
       { fg: (_c: string, s: string) => s } as never, // Theme
       null as never, // KeybindingsManager
       () => {}, // finish
@@ -153,6 +154,7 @@ describe("ReviewComponent callback `this` binding (regression)", () => {
       }, // git
       highlighter as never, // Highlighter
     );
+    captured.component = component;
   });
 
   // Return "resolved", "rejected:<name>", or "pending" after a short window.
@@ -180,5 +182,15 @@ describe("ReviewComponent callback `this` binding (regression)", () => {
     // Engine calls the captured reference without the component as receiver.
     const p = Promise.resolve().then(() => decide.call(undefined, makeView(file, file.hunks[0]!)));
     expect(await settle(p)).toBe("pending");
+  });
+
+  it("renders at the full terminal height (stable overlay position)", async () => {
+    // Empty file list: runReview resolves immediately, so the component is
+    // in the "done" phase and render() must pad to the terminal height.
+    const component = captured.component as unknown as { render(w: number): string[] };
+    const lines = component.render(100);
+    expect(lines.length).toBe(40);
+    expect(lines[0]!.startsWith("╭")).toBe(true);
+    expect(lines[39]!.startsWith("╰")).toBe(true);
   });
 });

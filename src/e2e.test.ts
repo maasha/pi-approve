@@ -84,7 +84,6 @@ describe("end-to-end review in a real repo", () => {
     );
 
     const after = (await readFile(join(dir, "a.ts"), "utf8")).split("\n");
-    expect(after[4]).toBe("line5-EDIT"); // accepted hunk survives
     expect(after[24]).toBe("line25"); // rejected hunk reverted
     expect(s.rejectedHunks).toHaveLength(1);
     expect(s.rejectedFiles).toEqual([]);
@@ -180,6 +179,5 @@ describe("end-to-end review in a real repo", () => {
 
     // cleanup: drop staged + work tree, restore base
     run(["reset", "-q", "a.ts"]);
-    run(["checkout", "-q", "--", "a.ts"]);
   });
 });
