@@ -30,7 +30,7 @@ describe("tokensToAnsi", () => {
     const out = tokensToAnsi(tokens);
     expect(out).toContain("\x1b[38;2;255;0;0m");
     expect(out).toContain("hello");
-    expect(out).toContain("\x1b[0m");
+    expect(out).toContain("\x1b[39m");
   });
 
   it("renders multiple tokens on the same line with reset between", () => {
@@ -42,9 +42,9 @@ describe("tokensToAnsi", () => {
       ],
     ];
     const out = tokensToAnsi(tokens);
-    expect(out).toContain("\x1b[38;2;255;0;0mconst\x1b[0m");
-    expect(out).toContain("\x1b[38;2;0;255;0m x \x1b[0m");
-    expect(out).toContain("\x1b[38;2;255;255;255m= 1;\x1b[0m");
+    expect(out).toContain("\x1b[38;2;255;0;0mconst\x1b[39m");
+    expect(out).toContain("\x1b[38;2;0;255;0m x \x1b[39m");
+    expect(out).toContain("\x1b[38;2;255;255;255m= 1;\x1b[39m");
   });
 
   it("renders multiple lines joined with newlines", () => {
@@ -53,7 +53,7 @@ describe("tokensToAnsi", () => {
       [{ content: "line2", color: "#ffffff" }],
     ];
     const out = tokensToAnsi(tokens);
-    expect(out).toBe("\x1b[38;2;255;255;255mline1\x1b[0m\n\x1b[38;2;255;255;255mline2\x1b[0m");
+    expect(out).toBe("\x1b[38;2;255;255;255mline1\x1b[39m\n\x1b[38;2;255;255;255mline2\x1b[39m");
   });
 
   it("handles empty token arrays", () => {
@@ -75,7 +75,7 @@ describe("renderDiffLine", () => {
     const theme = makeTheme();
     const tokens = [[{ content: "code", color: "#ffffff" }]];
     const out = renderDiffLine(tokens, "+", theme);
-    expect(out.startsWith("⟦success⟧+ ⟦/⟧")).toBe(true);
+    expect(out).toContain("⟦success⟧+ ⟦/⟧");
     expect(out).toContain("code");
   });
 
@@ -83,7 +83,7 @@ describe("renderDiffLine", () => {
     const theme = makeTheme();
     const tokens = [[{ content: "code", color: "#ffffff" }]];
     const out = renderDiffLine(tokens, "-", theme);
-    expect(out.startsWith("⟦error⟧- ⟦/⟧")).toBe(true);
+    expect(out).toContain("⟦error⟧- ⟦/⟧");
   });
 
   it("prerends context prefix in dim color", () => {
@@ -91,5 +91,26 @@ describe("renderDiffLine", () => {
     const tokens = [[{ content: "code", color: "#ffffff" }]];
     const out = renderDiffLine(tokens, " ", theme);
     expect(out.startsWith("⟦dim⟧  ⟦/⟧")).toBe(true);
+  });
+
+  it("wraps added lines in a pale green background", () => {
+    const theme = makeTheme();
+    const tokens = [[{ content: "code" }]];
+    const out = renderDiffLine(tokens, "+", theme);
+    expect(out).toBe("\x1b[48;2;22;101;52m" + "⟦success⟧+ ⟦/⟧code" + "\x1b[49m");
+  });
+
+  it("wraps removed lines in a pale red background", () => {
+    const theme = makeTheme();
+    const tokens = [[{ content: "code" }]];
+    const out = renderDiffLine(tokens, "-", theme);
+    expect(out).toBe("\x1b[48;2;60;22;30m" + "⟦error⟧- ⟦/⟧code" + "\x1b[49m");
+  });
+
+  it("leaves context lines without a background", () => {
+    const theme = makeTheme();
+    const tokens = [[{ content: "code" }]];
+    const out = renderDiffLine(tokens, " ", theme);
+    expect(out).not.toContain("48;2;");
   });
 });
