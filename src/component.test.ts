@@ -62,21 +62,24 @@ describe("hunkKeyToAction", () => {
 describe("formatMenu", () => {
   const theme = { fg: (_c: string, s: string) => s };
   const NAV = "[↑] prev hunk · [↓] next hunk · [←] prev file · [→] next file · [q] quit";
+  const SCROLL = "[PgUp/PgDn] scroll · [Home] top · [End] bottom";
 
-  it("renders two lines when there is enough width", () => {
+  it("renders three lines when there is enough width", () => {
     const lines = formatMenu(theme, 120);
-    expect(lines).toHaveLength(2);
+    expect(lines).toHaveLength(3);
     expect(lines[0]).toBe(
       "[a] accept hunk · [r] reject hunk · [A] accept file · [R] reject file · [v] revise",
     );
     expect(lines[1]).toBe(NAV);
+    expect(lines[2]).toBe(SCROLL);
   });
 
   it("wraps the first line when the width is too small", () => {
     const lines = formatMenu(theme, 40);
-    expect(lines).toHaveLength(3);
-    // First line is split into two parts; nav line is intact and last.
+    expect(lines).toHaveLength(4);
+    // First line is split into two parts; nav and scroll lines are intact.
     expect(lines[2]).toBe(NAV);
+    expect(lines[3]).toBe(SCROLL);
     const joined = lines.slice(0, 2).join(" · ");
     for (const item of [
       "[a] accept hunk",
@@ -88,6 +91,10 @@ describe("formatMenu", () => {
       expect(joined).toContain(item);
     }
     expect(lines.join("\n")).not.toContain("Esc");
+  });
+
+  it("documents PgUp/PgDn scrolling on a dedicated line", () => {
+    expect(formatMenu(theme, 120)[2]).toContain("[PgUp/PgDn] scroll");
   });
 });
 
@@ -191,5 +198,160 @@ describe("ReviewComponent callback `this` binding (regression)", () => {
     expect(lines.length).toBe(40);
     expect(lines[0]!.startsWith("╭")).toBe(true);
     expect(lines[39]!.startsWith("╰")).toBe(true);
+  });
+
+  it("deciding the last hunk (accept) ends the review", async () => {
+    // Sanity for the scrolling tests below: a plain "a" on the only hunk
+    // resolves the pending decision the same way runReview's engine would.
+    const component = captured.component as unknown as {
+      handleInput(data: string): void;
+    };
+    const decide = captured.decide!;
+    const file = {
+      path: "a.ts",
+      untracked: false,
+      kind: "modified",
+      language: "plaintext",
+      hunks: [{ header: null, lines: ["+x"], newStart: 1, oldStart: 0, oldCount: 0, newCount: 1 }],
+    } as FileChange;
+    const p = Promise.resolve().then(() => decide.call(undefined, makeView(file, file.hunks[0]!)));
+    const t = setTimeout(() => component.handleInput("a"), 10);
+    expect(await p).toEqual<HunkActionDecision>({ action: "accept" });
+    clearTimeout(t);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Diff scrolling: hunks taller than the overlay no longer truncate with an
+// ellipsis — they scroll (PgUp/PgDn/Home/End, wheel in fullscreen) with a
+// scrollbar drawn into the right border.
+// ---------------------------------------------------------------------------
+describe("ReviewComponent diff scrolling", () => {
+  type Comp = {
+    handleInput(data: string): void;
+    handleMouse(event: unknown): unknown;
+    render(w: number): string[];
+    scrollTop: number;
+    renderedLines: string[];
+  };
+
+  const W = 96; // inner 94: menu fits on two lines
+  // Highlighted lines may carry ANSI codes, so assert on visible text.
+  const plain = (s: string): string => s.replace(/\x1b\[[0-9;]*m/g, "");
+
+  async function makeOverflowComponent(linesCount: number): Promise<{ comp: Comp; decide: (v: HunkView) => Promise<HunkActionDecision> }> {
+    vi.resetModules();
+    const reviewMod = await import("./review.ts");
+    let capturedDecide: ((v: HunkView) => Promise<HunkActionDecision>) | undefined;
+    vi.spyOn(reviewMod, "runReview").mockImplementation(async (...args) => {
+      capturedDecide = args[1] as (v: HunkView) => Promise<HunkActionDecision>;
+      // Never resolves: the test parks the component on the first hunk and
+      // drives it directly (the engine loop is irrelevant for rendering).
+      return new Promise<never>(() => {});
+    });
+    const { ReviewComponent: Ctor } = await import("./component.ts");
+    const file: FileChange = {
+      path: "a.ts",
+      untracked: false,
+      kind: "modified",
+      language: "plaintext",
+      hunks: [{
+        header: null,
+        lines: Array.from({ length: linesCount }, (_, i) => `+line${i}`),
+        newStart: 1,
+        oldStart: 0,
+        oldCount: 0,
+        newCount: linesCount,
+      }],
+    };
+    const highlighter = {
+      ensure: async () => {},
+      highlightLine: async (l: string) => [[{ content: l }]],
+    };
+    const comp = new Ctor(
+      { requestRender: () => {}, terminal: { rows: 20 } } as never, // TUI
+      { fg: (_c: string, s: string) => s } as never, // Theme
+      null as never, // KeybindingsManager
+      () => {}, // finish
+      [file], // files
+      { resetTracked: async () => {}, removeUntracked: async () => {} }, // git
+      highlighter as never, // Highlighter
+    ) as unknown as Comp;
+    // Park on the first hunk the same way runReview does; let the async
+    // renderHunk() run before awaiting the (never-settling) decision.
+    void capturedDecide!(makeView(file, file.hunks[0]!));
+    await new Promise((r) => setTimeout(r, 0));
+    return { comp, decide: capturedDecide! };
+  }
+
+  it("shows the first lines with a scrollbar and no ellipsis line", async () => {
+    const { comp } = await makeOverflowComponent(50);
+    const lines = comp.render(W);
+    // 20 rows total; with a 3-line menu and no hunk header, the 8 diff rows
+    // sit at lines 6..13.
+    expect(lines).toHaveLength(20);
+    const diffRows = lines.slice(6, 14);
+    expect(diffRows[0]).toContain("+ line0");
+    expect(diffRows[7]).toContain("+ line7");
+    // No truncation marker anywhere.
+    expect(lines.join("\n")).not.toContain("…");
+    // 50 lines in an 8-row window: the thumb is round(8*8/50)=1 cell at the
+    // top (┃), plain track (│) on the rest.
+    expect(plain(diffRows[0]!)).toMatch(/┃$/);
+    expect(diffRows.slice(1).every((l) => plain(l).endsWith("│"))).toBe(true);
+  });
+
+  it("PgUp clamps at the top, PgDn scrolls one viewport", async () => {
+    const { comp } = await makeOverflowComponent(50);
+    comp.render(W);
+    comp.handleInput("\x1b[5~"); // pageUp
+    expect(comp.scrollTop).toBe(0);
+    comp.handleInput("\x1b[6~"); // pageDown (viewport 8, page 7)
+    expect(comp.scrollTop).toBe(7);
+    expect(comp.render(W)[6]).toContain("+ line7");
+  });
+
+  it("Home/End jump to the top and bottom", async () => {
+    const { comp } = await makeOverflowComponent(50);
+    comp.render(W);
+    comp.handleInput("\x1b[8~"); // End (maxScrollTop = 50 - 8 = 42)
+    expect(comp.scrollTop).toBe(42);
+    const lines = comp.render(W);
+    expect(lines[6]).toContain("+ line42");
+    expect(lines[13]).toContain("+ line49");
+    // At the bottom the 1-cell thumb sits on the last visible row.
+    expect(lines.slice(6, 13).every((l) => plain(l).endsWith("│"))).toBe(true);
+    expect(plain(lines[13]!)).toMatch(/┃$/);
+    comp.handleInput("\x1b[H"); // Home
+    expect(comp.scrollTop).toBe(0);
+  });
+
+  it("the wheel scrolls too", async () => {
+    const { comp } = await makeOverflowComponent(50);
+    comp.render(W);
+    comp.handleMouse({ type: "wheel", wheelDelta: 4 });
+    expect(comp.scrollTop).toBe(4);
+    comp.handleMouse({ type: "wheel", wheelDelta: -2 });
+    expect(comp.scrollTop).toBe(2);
+    // Non-wheel events are ignored.
+    expect(comp.handleMouse({ type: "click" })).toBeUndefined();
+  });
+
+  it("short hunks render unchanged (plain border, no scrollbar)", async () => {
+    const { comp } = await makeOverflowComponent(5);
+    const lines = comp.render(W);
+    expect(lines[6]).toContain("+ line0");
+    expect(lines[10]).toContain("+ line4");
+    // Right border stays a plain │ on every diff row.
+    expect(lines.slice(6, 11).every((l) => plain(l).endsWith("│"))).toBe(true);
+  });
+
+  it("scrolling never exceeds the content", async () => {
+    const { comp } = await makeOverflowComponent(50);
+    comp.render(W);
+    for (let i = 0; i < 10; i++) comp.handleInput("\x1b[6~");
+    expect(comp.scrollTop).toBe(42);
+    for (let i = 0; i < 10; i++) comp.handleInput("\x1b[5~");
+    expect(comp.scrollTop).toBe(0);
   });
 });

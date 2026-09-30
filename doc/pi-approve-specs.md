@@ -75,6 +75,7 @@ Reject all pending changes. For tracked files, `git checkout --` each modified f
 ```
 [a] accept hunk · [r] reject hunk · [A] accept file · [R] reject file · [v] revise
 [↑] prev hunk · [↓] next hunk · [←] prev file · [→] next file · [q] quit
+[PgUp/PgDn] scroll · [Home] top · [End] bottom
 ```
 
 There is **no default action** — Enter does nothing in the hunk view, so nothing can be
@@ -108,6 +109,26 @@ viewing cursor**: it never decides anything.
 | `↓` | Next hunk in the static list. Clamps at the last hunk. |
 | `←` | Previous **open** file (a file with ≥1 undecided hunk). Lands on that file's **last** undecided hunk. Skips files with no undecided hunks. Clamps if none earlier. |
 | `→` | Next **open** file. Lands on that file's **first** undecided hunk. Skips files with no undecided hunks. Clamps if none later. |
+
+### Diff scrolling
+
+A hunk taller than the overlay window is **not truncated** — it scrolls. The
+view starts at the top of each hunk and the scroll position resets when the
+viewing cursor moves to another hunk.
+
+| Input | Effect |
+|---|---|
+| `PgUp` / `PgDn` | Scroll the diff up / down by one page (the visible diff height minus one line, so pages overlap). Clamps at the top and bottom. |
+| `Home` / `End` | Jump to the top / bottom of the diff. |
+| Mouse wheel | Scroll one line per wheel notch (fullscreen/alt-screen mode only — in regular mode the terminal keeps mouse input, so the wheel is unavailable). |
+
+While the hunk overflows, a scrollbar is drawn into the **right border** of the
+diff region: the track is the full height of the diff window, the thumb is
+proportional to how much of the hunk is visible, and it slides with the scroll
+position. When the hunk fits, the border is plain (no scrollbar).
+
+The arrow keys keep their navigation meaning and **never scroll** — scrolling
+is a separate concern from moving the viewing cursor.
 
 - After any decision on the current hunk, the cursor **auto-advances** to the next
   undecided hunk (any file) so the user is not left standing on an inert hunk. If no

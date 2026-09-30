@@ -61,7 +61,8 @@ When you run `/approve`, a modal overlay appears for each diff hunk:
 │ ────────────────────────────────────────────────────────────────────────│
 │  [a] accept hunk · [r] reject hunk · [A] accept file · [R] reject file  │
 │  [v] revise                                                             │
-│  [↑] prev hunk · [↓] next hunk · [←] prev file · [→] next file · [q] quit │
+│  [↑] prev hunk · [↓] next hunk · [←] prev file · [→] next file · [q] quit│
+│  [PgUp/PgDn] scroll · [Home] top · [End] bottom                         │
 ╰─────────────────────────────────────────────────────────────────────────╯
 ```
 
@@ -74,12 +75,18 @@ When you run `/approve`, a modal overlay appears for each diff hunk:
 | `v` | **Revise** — type feedback, which is sent to the agent immediately; when the agent finishes, you're asked whether to return to the review at the same hunk |
 | `↑` / `↓` | Previous / next **hunk** (may land on an already-decided hunk, which is shown but inert) |
 | `←` / `→` | Previous / next **open file** (a file with undecided hunks); skips fully-decided files |
+| `PgUp` / `PgDn` | Scroll a tall hunk up / down by one page |
+| `Home` / `End` | Jump to the top / bottom of a tall hunk |
+| Mouse wheel | Scroll a tall hunk (fullscreen/alt-screen mode only — in regular mode the terminal keeps the mouse, so use PgUp/PgDn) |
 | `q` | Quit the review |
 | `Esc` | Quit the review (also cancels the revise prompt). Not shown in the on-screen menu, but works. |
 
 Navigation never accepts or rejects — it only moves the viewing cursor. The meta line shows
 a live `file X/Y` counter: **Y** is the number of files with at least one undecided hunk,
-and it decreases as files get fully decided. The review auto-closes when every hunk has been
+and it decreases as files get fully decided. A hunk taller than the overlay window is not
+cut off — it scrolls (PgUp/PgDn/Home/End, or the wheel in fullscreen), starting at the
+top, with a scrollbar in the right border showing your position; the view resets to the
+top when you move to another hunk. The review auto-closes when every hunk has been
 decided; quitting early leaves undecided hunks untouched on disk.
 
 ## How it works
@@ -97,7 +104,6 @@ decided; quitting early leaves undecided hunks untouched on disk.
 
 ## Known limitations
 
-- **Theme**: Shiki uses the fixed `dark-plus` palette. It does not automatically match Pi's active terminal theme.
 - **Rejection granularity**: `r` asks the agent to revert only the hunk you reject — when the agent finishes, returning to the review (one keypress) lets you confirm the rest of the file and any staged changes are untouched. `R` (and `--reject-all`) reset the whole file's working tree to the *index*, preserving staged changes, instantly. Neither operation modifies the index, so staged (already approved) changes are never at risk.
 - **Untracked directories**: Only untracked *files* are shown. Empty directories or directories containing only other empty directories are invisible to git and therefore to this extension.
 - **Mode-only changes**: `chmod` / `chown` changes do not appear in `git diff` and are not reviewed.

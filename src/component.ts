@@ -3,6 +3,8 @@ import type {
   Focusable,
   KeybindingsManager,
   TUI,
+  TuiMouseEvent,
+  TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
 import {
   CURSOR_MARKER,
@@ -45,10 +47,11 @@ export function hunkKeyToAction(data: string): HunkActionDecision | null {
 }
 
 /**
- * Render the key-binding menu: a decision line and a navigation line.
- * The decision line fits on one line when `innerWidth` is wide enough;
- * otherwise it wraps after "[A] accept file". Esc is intentionally not
- * shown (it still quits); it is documented in the README instead.
+ * Render the key-binding menu: a decision line, a navigation line, and a
+ * scrolling line. The decision line fits on one line when `innerWidth` is
+ * wide enough; otherwise it wraps after "[A] accept file". Esc is
+ * intentionally not shown (it still quits); it is documented in the README
+ * instead.
  */
 export function formatMenu(theme: { fg(color: string, text: string): string }, innerWidth: number): string[] {
   const items = [
@@ -63,16 +66,10 @@ export function formatMenu(theme: { fg(color: string, text: string): string }, i
   const firstLine = visibleWidth(whole) <= innerWidth
     ? [whole]
     : [items.slice(0, 3).join(sep), items.slice(3).join(sep)];
-  const nav = [
-    "[↑] prev hunk",
-    "[↓] next hunk",
-    "[←] prev file",
-    "[→] next file",
-    "[q] quit",
-  ]
-    .map((s) => theme.fg("dim", s))
-    .join(theme.fg("dim", " · "));
-  return [...firstLine, nav];
+  const join = (parts: string[]) => parts.map((s) => theme.fg("dim", s)).join(theme.fg("dim", " · "));
+  const nav = join(["[↑] prev hunk", "[↓] next hunk", "[←] prev file", "[→] next file", "[q] quit"]);
+  const scroll = join(["[PgUp/PgDn] scroll", "[Home] top", "[End] bottom"]);
+  return [...firstLine, nav, scroll];
 }
 
 type Phase = "busy" | "hunk" | "revise" | "done";
@@ -96,6 +93,10 @@ export class ReviewComponent implements Component, Focusable {
   private openFilePos = 1;
   private openFileCount = 1;
   private renderedLines: string[] = [];
+  /** First visible diff line of the current hunk (vertical scroll offset). */
+  private scrollTop = 0;
+  /** Inner box width from the last render (for page-size estimates). */
+  private lastInner = 0;
 
   private reviseText = "";
   private reviseCursor = 0;
@@ -156,6 +157,7 @@ export class ReviewComponent implements Component, Focusable {
     this.currentStatus = view.status;
     this.openFilePos = view.openFilePos;
     this.openFileCount = view.openFileCount;
+    this.scrollTop = 0;
     this.phase = "busy";
     this.renderedLines = await this.renderHunk(view.file, view.hunk);
     this.phase = "hunk";
@@ -180,6 +182,24 @@ export class ReviewComponent implements Component, Focusable {
   handleInput(data: string): void {
     switch (this.phase) {
       case "hunk": {
+        // Viewport scrolling is independent of hunk navigation (↑/↓ keep
+        // moving the viewing cursor, per the spec).
+        if (matchesKey(data, "pageUp")) {
+          this.scrollBy(-Math.max(1, this.diffViewportRows() - 1));
+          return;
+        }
+        if (matchesKey(data, "pageDown")) {
+          this.scrollBy(Math.max(1, this.diffViewportRows() - 1));
+          return;
+        }
+        if (matchesKey(data, "home")) {
+          this.scrollToTop();
+          return;
+        }
+        if (matchesKey(data, "end")) {
+          this.scrollToBottom();
+          return;
+        }
         const decision = hunkKeyToAction(data);
         if (!decision) return;
         // Decision keys are inert on an already-decided hunk (it can only be
@@ -243,13 +263,16 @@ export class ReviewComponent implements Component, Focusable {
     // Span the full overlay width (the pi terminal), with a sane floor.
     const w = Math.max(40, viewportWidth);
     const inner = w - 2;
-    const box = (s: string): string => {
+    this.lastInner = inner;
+    const border = this.theme.fg("border", "│");
+    const box = (s: string, right?: string): string => {
+      const rightChar = right ?? border;
       const vis = visibleWidth(s);
       return (
-        this.theme.fg("border", "│") +
+        border +
         s +
-        " ".repeat(Math.max(0, inner - vis)) +
-        this.theme.fg("border", "│")
+        " ".repeat(Math.max(0, inner - 1 - vis)) +
+        rightChar
       );
     };
     const top = this.theme.fg("border", `╭${"─".repeat(inner)}╮`);
@@ -278,16 +301,19 @@ export class ReviewComponent implements Component, Focusable {
         lines.push(box(` ${this.theme.fg("dim", this.currentHunk.header)}`));
       }
       lines.push(box(""));
-      // Cap the diff to the rows the window can hold (top/bottom borders,
-      // title, path, meta, header, blanks, menu), so the box never exceeds
-      // the terminal and off-screen lines are simply dropped from the end.
+      // Show only the rows the window can hold (top/bottom borders, title,
+      // path, meta, header, blanks, menu); overflow is reached by scrolling
+      // (PgUp/PgDn/Home/End, wheel in fullscreen) and a scrollbar in the
+      // right border indicates position and how much is off-screen.
       const overhead = 9 + formatMenu(this.theme, inner).length;
       const maxDiff = Math.max(4, termRows > 0 ? termRows - overhead : this.renderedLines.length);
-      for (const l of this.renderedLines.slice(0, maxDiff)) {
-        lines.push(box(l));
-      }
-      if (this.renderedLines.length > maxDiff) {
-        lines.push(box(` ${this.theme.fg("dim", "…")}`));
+      const total = this.renderedLines.length;
+      const overflow = Math.max(0, total - maxDiff);
+      const first = Math.max(0, Math.min(this.scrollTop, overflow));
+      for (let i = 0; i < maxDiff; i++) {
+        const l = this.renderedLines[first + i];
+        if (l === undefined) break;
+        lines.push(box(l, this.scrollbar(overflow, maxDiff, first, total, i)));
       }
       lines.push(box(""));
       for (const menuLine of formatMenu(this.theme, inner)) {
@@ -319,6 +345,69 @@ export class ReviewComponent implements Component, Focusable {
     }
 
     return finish();
+  }
+
+  /**
+   * One character of the scrollbar for a diff row, or undefined to keep the
+   * plain border when there is no overflow. Drawn into the right border so
+   * the box shape is unchanged; geometry mirrors pi's own ScrollView.
+   */
+  private scrollbar(overflow: number, viewport: number, top: number, total: number, row: number): string | undefined {
+    if (overflow <= 0 || viewport <= 0 || total <= viewport) return undefined;
+    // Mirror pi's own ScrollView geometry: the track is the viewport, the
+    // thumb is proportional to how much fits, and it slides within the track.
+    const thumbLen = Math.max(1, Math.min(viewport, Math.round((viewport * viewport) / total)));
+    const maxScroll = total - viewport;
+    const thumbOffset = maxScroll === 0 ? 0 : Math.round((top / maxScroll) * (viewport - thumbLen));
+    const inThumb = row >= thumbOffset && row < thumbOffset + thumbLen;
+    const ch = inThumb && (row === thumbOffset || row === thumbOffset + thumbLen - 1) ? "┃" : inThumb ? "█" : "│";
+    // Close the foreground: a highlighted diff line may end with an open SGR
+    // code, and the border must not inherit it.
+    return `\x1b[39m${this.theme.fg(inThumb ? "scrollbarThumb" : "scrollbarTrack", ch)}`;
+  }
+
+  /** Number of diff rows currently renderable in the overlay (0 while unknown). */
+  private diffViewportRows(): number {
+    const termRows = this.tui.terminal?.rows ?? 0;
+    if (termRows <= 0) return 0;
+    return Math.max(4, termRows - (9 + formatMenu(this.theme, this.lastInner).length));
+  }
+
+  private maxScrollTop(): number {
+    return Math.max(0, this.renderedLines.length - this.diffViewportRows());
+  }
+
+  private setClampedScrollTop(top: number): void {
+    const next = Math.max(0, Math.min(this.maxScrollTop(), top));
+    if (next === this.scrollTop) return;
+    this.scrollTop = next;
+    this.requestRender();
+  }
+
+  private scrollBy(delta: number): void {
+    if (delta !== 0) this.setClampedScrollTop(this.scrollTop + delta);
+  }
+
+  private scrollToTop(): void {
+    this.setClampedScrollTop(0);
+  }
+
+  private scrollToBottom(): void {
+    this.setClampedScrollTop(this.maxScrollTop());
+  }
+
+  /**
+   * Scroll the diff with the mouse wheel (fullscreen/alt-screen mode only —
+   * in regular mode the terminal keeps mouse input, so the wheel never
+   * reaches the overlay). Negative deltas scroll up, matching pi's own
+   * `ScrollView.scrollBy` convention.
+   */
+  handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    if (event.type !== "wheel" || this.phase !== "hunk") return undefined;
+    // pi already turned the raw wheel event into a line count (with spin
+    // acceleration); the sign follows ScrollView convention (negative = up).
+    this.scrollBy(event.wheelDelta ?? 0);
+    return { handled: true };
   }
 
   private metaLine(file: FileChange): string {
