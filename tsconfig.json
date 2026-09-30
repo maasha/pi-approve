@@ -11,15 +11,7 @@
     "skipLibCheck": true,
     "resolveJsonModule": true,
     "forceConsistentCasingInFileNames": true,
-    "types": ["node"],
-    "paths": {
-      "@earendil-works/pi-coding-agent": [
-        "/usr/local/share/npm-global/lib/node_modules/@earendil-works/pi-coding-agent"
-      ],
-      "@earendil-works/pi-tui": [
-        "/usr/local/share/npm-global/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-tui"
-      ]
-    }
+    "types": ["node"]
   },
   "include": ["src/**/*.ts", "test/**/*.ts"]
 }

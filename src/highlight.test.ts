@@ -5,13 +5,20 @@ import type { Token } from "./render.ts";
 /** A fake highlighter that tags tokens with a color, to exercise the wrapper. */
 function fakeCreate(tag: string) {
   let calledLangs: string[] | null = null;
-  const spy = { calledLangs: () => calledLangs };
+  let calledThemes: string[] | null = null;
+  const spy = {
+    calledLangs: () => calledLangs,
+    calledThemes: () => calledThemes,
+    usedThemes: [] as string[],
+  };
   const create = async (opts: { themes: string[]; langs: string[] }) => {
     calledLangs = opts.langs;
+    calledThemes = opts.themes;
     return {
-      codeToTokens: (code: string) => ({
-        tokens: [[{ content: code, color: tag }]],
-      }),
+      codeToTokens: (code: string, opts2: { theme: string }) => {
+        spy.usedThemes.push(opts2.theme);
+        return { tokens: [[{ content: code, color: tag }]] };
+      },
     };
   };
   return { create, spy };
@@ -50,6 +57,37 @@ describe("Highlighter (with a highlighter)", () => {
     const out = await h.highlightLine("const x = 1;", "typescript");
     expect(spy.calledLangs()).toEqual(["typescript"]);
     expect(out[0]![0]!.color).toBe("#ff0000");
+  });
+
+  it("loads both palettes up front", async () => {
+    const { create, spy } = fakeCreate("#ff0000");
+    const h = new Highlighter(create);
+    await h.highlightLine("a", "typescript");
+    expect(spy.calledThemes()).toEqual(["dark-plus", "light-plus"]);
+  });
+
+  it("defaults to the dark palette", async () => {
+    const { create, spy } = fakeCreate("#ff0000");
+    const h = new Highlighter(create);
+    await h.highlightLine("a", "typescript");
+    expect(spy.usedThemes).toEqual(["dark-plus"]);
+  });
+
+  it("uses the light palette when the terminal theme is light", async () => {
+    const { create, spy } = fakeCreate("#ff0000");
+    const h = new Highlighter(create, () => true);
+    await h.highlightLine("a", "typescript");
+    expect(spy.usedThemes).toEqual(["light-plus"]);
+  });
+
+  it("follows the terminal theme at render time", async () => {
+    let light = false;
+    const { create, spy } = fakeCreate("#ff0000");
+    const h = new Highlighter(create, () => light);
+    await h.highlightLine("a", "typescript");
+    light = true;
+    await h.highlightLine("b", "typescript");
+    expect(spy.usedThemes).toEqual(["dark-plus", "light-plus"]);
   });
 
   it("reuses the initialised highlighter across calls (factory called once)", async () => {

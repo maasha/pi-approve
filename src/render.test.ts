@@ -93,18 +93,11 @@ describe("renderDiffLine", () => {
     expect(out.startsWith("⟦dim⟧  ⟦/⟧")).toBe(true);
   });
 
-  it("wraps added lines in a pale green background", () => {
+  it("leaves diff lines without a background", () => {
     const theme = makeTheme();
     const tokens = [[{ content: "code" }]];
-    const out = renderDiffLine(tokens, "+", theme);
-    expect(out).toBe("\x1b[48;2;22;101;52m" + "⟦success⟧+ ⟦/⟧code" + "\x1b[49m");
-  });
-
-  it("wraps removed lines in a pale red background", () => {
-    const theme = makeTheme();
-    const tokens = [[{ content: "code" }]];
-    const out = renderDiffLine(tokens, "-", theme);
-    expect(out).toBe("\x1b[48;2;60;22;30m" + "⟦error⟧- ⟦/⟧code" + "\x1b[49m");
+    expect(renderDiffLine(tokens, "+", theme)).not.toContain("48;2;");
+    expect(renderDiffLine(tokens, "-", theme)).not.toContain("48;2;");
   });
 
   it("leaves context lines without a background", () => {

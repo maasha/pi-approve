@@ -14,8 +14,7 @@ export interface Token {
 
 /**
  * Render a Shiki-style token array (array of lines, each an array of tokens)
- * into an ANSI-colored string. The per-token reset is fg-only (`\x1b[39m`)
- * so it does not wipe the surrounding diff-line background.
+ * into an ANSI-colored string.
  */
 export function tokensToAnsi(tokens: Token[][]): string {
   return tokens
@@ -36,22 +35,13 @@ export interface ThemeLike {
   fg(color: string, text: string): string;
 }
 
-/** Pale backgrounds for added/removed diff lines. */
-export const ADDED_BG = "\x1b[48;2;22;101;52m";
-export const REMOVED_BG = "\x1b[48;2;60;22;30m";
-const BG_RESET = "\x1b[49m";
-
 /**
  * Render one diff line: a colored +/-/space prefix followed by the
- * highlighted tokens. Added lines get a pale green background, removed
- * lines a pale red one.
+ * highlighted tokens.
  */
 export function renderDiffLine(tokens: Token[][], prefix: string, theme: ThemeLike): string {
   const color = prefix === "+" ? "success" : prefix === "-" ? "error" : "dim";
   const prefixChar = prefix === " " ? " " : prefix;
   const label = theme.fg(color, `${prefixChar} `);
-  const content = `${label}${tokensToAnsi(tokens)}`;
-  if (prefix === "+") return `${ADDED_BG}${content}${BG_RESET}`;
-  if (prefix === "-") return `${REMOVED_BG}${content}${BG_RESET}`;
-  return content;
+  return `${label}${tokensToAnsi(tokens)}`;
 }

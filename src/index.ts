@@ -40,9 +40,15 @@ export default function piApprove(pi: ExtensionAPI) {
     // Present in deterministic order: alphabetical by path, then diff order.
     const sorted = [...files].sort((a, b) => a.path.localeCompare(b.path));
 
+    // The diff's syntax palette follows pi's active theme (dark/light) so the
+    // code stays readable on the overlay's background. `Theme.appearance`
+    // reports whether the active theme is designed for a light background;
+    // read lazily per line so a theme switch mid-review is picked up.
+    const isLight = () => ctx.ui.theme?.appearance === "light";
+
     const result = await ctx.ui.custom<ReviewResult | undefined>(
       (tui, theme, keybindings, done) =>
-        new ReviewComponent(tui, theme, keybindings, done, sorted, gitFor(dir), getDefaultHighlighter(), resume),
+        new ReviewComponent(tui, theme, keybindings, done, sorted, gitFor(dir), getDefaultHighlighter(isLight), resume),
       { overlay: true, overlayOptions: { width: "100%", anchor: "top-center" } },
     );
 

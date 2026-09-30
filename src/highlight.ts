@@ -1,7 +1,13 @@
 import type { Token } from "./render.ts";
 
-/** Shiki theme used for diff highlighting (dark, VS Code dark-plus palette). */
-const THEME = "dark-plus";
+/**
+ * Shiki themes used for diff highlighting, matched to the overlay's active
+ * theme so the code palette suits the surrounding background (VS Code's
+ * dark-plus / light-plus palettes). Both are loaded up front; themes are small
+ * and selecting one at render time is free.
+ */
+export const DARK_THEME = "dark-plus";
+export const LIGHT_THEME = "light-plus";
 
 /** The subset of the Shiki highlighter surface we use. */
 export interface CoreHighlighter {
@@ -16,10 +22,9 @@ export type CreateHighlighter = (opts: {
   langs: string[];
 }) => Promise<CoreHighlighter>;
 
-
 /**
  * A lazily-initialised highlighter backed by Shiki's `createdBundledHighlighter`
- * (lightweight: only the requested languages and the single theme are loaded).
+ * (lightweight: only the requested languages are loaded).
  *
  * `create` is injectable so unit tests can run without the real WASM/oniguruma
  * engine. When `create` is null (e.g. Shiki failed to initialise) every call
@@ -29,7 +34,22 @@ export class Highlighter {
   private core: CoreHighlighter | null = null;
   private initPromise: Promise<void> | null = null;
 
-  constructor(private readonly create: CreateHighlighter | null) { }
+  /**
+   * `isLight` reports whether the pi terminal's active theme is a light one,
+   * so the code palette follows the surrounding overlay.
+   */
+  constructor(
+    private readonly create: CreateHighlighter | null,
+    private readonly isLight?: () => boolean,
+  ) { }
+
+  private activeTheme(): string {
+    try {
+      return this.isLight?.() ? LIGHT_THEME : DARK_THEME;
+    } catch {
+      return DARK_THEME;
+    }
+  }
 
   /** Ensure the core is initialised for the given set of languages. */
   async ensure(langs: string[]): Promise<void> {
@@ -39,7 +59,7 @@ export class Highlighter {
     this.initPromise = (async () => {
       try {
         const unique = [...new Set(langs.filter((l) => l && l !== "plaintext"))];
-        this.core = await create({ themes: [THEME], langs: unique });
+        this.core = await create({ themes: [DARK_THEME, LIGHT_THEME], langs: unique });
       } catch {
         this.core = null;
       }
@@ -55,8 +75,9 @@ export class Highlighter {
     if (!language || language === "plaintext") return [[{ content: line }]];
     await this.ensure([language]);
     if (!this.core) return [[{ content: line }]];
+    const theme = this.activeTheme();
     try {
-      const result = this.core.codeToTokens(line, { lang: language, theme: THEME });
+      const result = this.core.codeToTokens(line, { lang: language, theme });
       const first = result.tokens[0];
       return first && first.length > 0 ? [first] : [[{ content: line }]];
     } catch {
@@ -72,19 +93,25 @@ let defaultInstance: Highlighter | null = null;
  * wires a name→lazy-import resolver, so only the languages and theme we actually
  * request are loaded.
  */
-export function createRealHighlighter(): Highlighter {
-  return new Highlighter(async (opts) => {
-    const { createdBundledHighlighter } = await import("shiki/core");
-    const { bundledLanguages } = await import("shiki/langs");
-    const { bundledThemes } = await import("shiki/themes");
-    const { default: wasm } = await import("shiki/wasm");
-    const factory = createdBundledHighlighter(bundledLanguages, bundledThemes, wasm);
-    return factory(opts) as Promise<CoreHighlighter>;
-  });
+export function createRealHighlighter(isLight?: () => boolean): Highlighter {
+  return new Highlighter(
+    async (opts) => {
+      const { createdBundledHighlighter } = await import("shiki/core");
+      const { bundledLanguages } = await import("shiki/langs");
+      const { bundledThemes } = await import("shiki/themes");
+      const { default: wasm } = await import("shiki/wasm");
+      const factory = createdBundledHighlighter(bundledLanguages, bundledThemes, wasm);
+      return factory(opts) as Promise<CoreHighlighter>;
+    },
+    isLight,
+  );
 }
 
-/** Shared singleton for the whole extension process. */
-export function getDefaultHighlighter(): Highlighter {
-  if (!defaultInstance) defaultInstance = createRealHighlighter();
+/**
+ * Shared singleton for the whole extension process. `isLight` reads pi's
+ * currently active theme, so the palette follows theme switches at any time.
+ */
+export function getDefaultHighlighter(isLight?: () => boolean): Highlighter {
+  if (!defaultInstance) defaultInstance = createRealHighlighter(isLight);
   return defaultInstance;
 }
